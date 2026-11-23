@@ -28,12 +28,14 @@ public:
 	static const TCHAR* RootPath;
 	static const TCHAR* MaterialsPath;
 	static const TCHAR* MeshesPath;
+	static const TCHAR* SubgraphsPath;
 
 private:
 	explicit FCityContentBuilder(FReport& InReport) : Report(InReport) {}
 
 	void BuildMaterials();
 	void BuildMeshes();
+	void BuildGraphs();
 	void SaveAll();
 
 	/** Asset at PackageName if it exists (on disk or in memory), loaded. */
