@@ -4,6 +4,7 @@
 #include "HAL/PlatformTime.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
@@ -31,7 +32,8 @@ TSharedRef<SWidget> SCityGeneratorPanel::MakeParameterRow(const FText& Label, co
 			.Delta(Delta)
 			.Value_Lambda([&Value]() { return Value; })
 			.OnValueChanged_Lambda([&Value](T NewValue) { Value = NewValue; })
-			.OnValueCommitted_Lambda([&Value](T NewValue, ETextCommit::Type) { Value = NewValue; })
+			.OnValueCommitted_Lambda([this, &Value](T NewValue, ETextCommit::Type) { Value = NewValue; OnParameterCommitted(); })
+			.OnEndSliderMovement_Lambda([this](T) { OnParameterCommitted(); })
 		];
 }
 
@@ -108,9 +110,30 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("SeedSection", "Semilla")) ]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				MakeParameterRow(LOCTEXT("Seed", "Seed"),
-					LOCTEXT("SeedTip", "Identifica el escenario: la misma seed siempre da la misma ciudad."),
-					Params.Seed, 0, 9999999, 1)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.0f)
+				[
+					MakeParameterRow(LOCTEXT("Seed", "Seed"),
+						LOCTEXT("SeedTip", "Identifica el escenario: la misma seed siempre da la misma ciudad."),
+						Params.Seed, 0, 9999999, 1)
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("RandomSeed", "Aleatoria"))
+					.ToolTipText(LOCTEXT("RandomSeedTip", "Elige otra seed al azar."))
+					.OnClicked(this, &SCityGeneratorPanel::OnRandomSeedClicked)
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)
+			[
+				SNew(SCheckBox)
+				.IsChecked_Lambda([this]() { return bAutoRegenerate ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { bAutoRegenerate = State == ECheckBoxState::Checked; })
+				.ToolTipText(LOCTEXT("AutoTip", "Si ya hay una ciudad, se regenera al soltar un deslizador o escribir un valor."))
+				[
+					SNew(STextBlock).Text(LOCTEXT("Auto", "Regenerar al cambiar un valor"))
+				]
 			]
 
 			// Actions
@@ -140,8 +163,28 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 				.Text_Lambda([this]() { return StatusText; })
 				.AutoWrapText(true)
 			]
+
+			// What is in the level right now
+			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("StatsSection", "Ciudad en el nivel")) ]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock)
+				.Text(this, &SCityGeneratorPanel::GetStatsText)
+				.AutoWrapText(true)
+			]
 		]
 	];
+}
+
+void SCityGeneratorPanel::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+{
+	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+	if (InCurrentTime >= NextStatsRefreshTime)
+	{
+		CachedStats = Tool->ComputeStats();
+		NextStatsRefreshTime = InCurrentTime + 0.5;
+	}
 }
 
 TSharedRef<SWidget> SCityGeneratorPanel::MakeSectionHeader(const FText& Title) const
@@ -162,7 +205,24 @@ TSharedRef<SWidget> SCityGeneratorPanel::MakeSectionHeader(const FText& Title) c
 FReply SCityGeneratorPanel::OnGenerateClicked()
 {
 	Tool->Generate(/*bFullRebuild=*/true, StatusText);
+	NextStatsRefreshTime = 0.0;
 	return FReply::Handled();
+}
+
+FReply SCityGeneratorPanel::OnRandomSeedClicked()
+{
+	Tool->Params.Seed = FMath::RandRange(0, 9999999); // only picks the number: the city still comes from it
+	OnParameterCommitted();
+	return FReply::Handled();
+}
+
+void SCityGeneratorPanel::OnParameterCommitted()
+{
+	if (bAutoRegenerate && Tool->HasCity())
+	{
+		Tool->Generate(/*bFullRebuild=*/false, StatusText);
+		NextStatsRefreshTime = 0.0;
+	}
 }
 
 FReply SCityGeneratorPanel::OnCleanupClicked()
@@ -171,7 +231,35 @@ FReply SCityGeneratorPanel::OnCleanupClicked()
 	StatusText = Removed > 0
 		? FText::Format(LOCTEXT("Cleaned", "Ciudad eliminada ({0} actor/es borrados)."), Removed)
 		: LOCTEXT("NothingToClean", "No había ninguna ciudad que limpiar.");
+	NextStatsRefreshTime = 0.0;
 	return FReply::Handled();
+}
+
+FText SCityGeneratorPanel::GetStatsText() const
+{
+	const FCityStats& Stats = CachedStats;
+	if (Stats.NumCities == 0)
+	{
+		return LOCTEXT("NoCity", "No hay ninguna ciudad generada.");
+	}
+
+	TArray<FString> Lines;
+	if (Stats.bGenerating)
+	{
+		Lines.Add(LOCTEXT("Generating", "Generando...").ToString());
+	}
+	if (Stats.NumCities > 1)
+	{
+		Lines.Add(FText::Format(LOCTEXT("SeveralCities", "Atención: hay {0} ciudades en el nivel. Generar las sustituye por una."), Stats.NumCities).ToString());
+	}
+	Lines.Add(FText::Format(LOCTEXT("Total", "Instancias: {0}"), Stats.TotalInstances).ToString());
+	for (const TPair<FString, int32>& Pair : Stats.InstancesPerType)
+	{
+		Lines.Add(FString::Printf(TEXT("    %s: %d"), *Pair.Key, Pair.Value));
+	}
+	Lines.Add(FText::Format(LOCTEXT("Fingerprint", "Huella: {0}  (misma seed y parámetros = misma huella)"), FText::FromString(FString::Printf(TEXT("%08X"), Stats.Fingerprint))).ToString());
+
+	return FText::FromString(FString::Join(Lines, TEXT("\n")));
 }
 
 FText SCityGeneratorPanel::GetGraphStatusText() const

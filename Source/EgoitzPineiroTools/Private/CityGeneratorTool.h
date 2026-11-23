@@ -16,9 +16,24 @@ struct FCityGenerationParams
 	int32 Seed = 1234;
 };
 
+/** What the panel shows about the city currently in the level. */
+struct FCityStats
+{
+	int32 NumCities = 0;
+	bool bGenerating = false;
+	int32 TotalInstances = 0;
+	/** "Mesh / Material" and how many instances of it, sorted by name. */
+	TArray<TPair<FString, int32>> InstancesPerType;
+	/**
+	 * Order-independent hash of every generated instance (mesh, material, position, rotation, scale).
+	 * Same seed and parameters -> same fingerprint. Used to show the determinism in the demo.
+	 */
+	uint32 Fingerprint = 0;
+};
+
 /**
  * Everything the panel does, without any UI: create the city actor, push the parameters into
- * PCG_City, generate and clean up.
+ * PCG_City, generate, clean up and measure the result.
  */
 class FCityGeneratorTool
 {
@@ -47,6 +62,9 @@ public:
 	int32 Cleanup();
 
 	bool HasCity() const;
+
+	/** Counts the generated instances and computes the fingerprint of the city in the level. */
+	FCityStats ComputeStats() const;
 
 	/** True if PCG_City exists in the plugin's Content folder. */
 	static bool IsGraphAvailable();

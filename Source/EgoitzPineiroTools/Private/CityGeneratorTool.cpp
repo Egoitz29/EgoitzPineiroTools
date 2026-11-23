@@ -1,8 +1,11 @@
 ﻿#include "CityGeneratorTool.h"
 
 #include "CityGeneratorActor.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Editor.h"
+#include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/PackageName.h"
 #include "PCGComponent.h"
 #include "PCGGraph.h"
@@ -163,6 +166,62 @@ int32 FCityGeneratorTool::Cleanup()
 	}
 
 	return ToDestroy.Num();
+}
+
+FCityStats FCityGeneratorTool::ComputeStats() const
+{
+	FCityStats Stats;
+	TMap<FString, int32> PerType;
+	uint64 HashSum = 0;
+
+	for (ACityGeneratorActor* City : FindCities(GetEditorWorld()))
+	{
+		++Stats.NumCities;
+		if (const UPCGComponent* PCG = City->GetPCGComponent())
+		{
+			Stats.bGenerating |= PCG->IsGenerating();
+		}
+
+		// PCG puts every Static Mesh Spawner result in instanced components of the city actor
+		TArray<UInstancedStaticMeshComponent*> Components;
+		City->GetComponents(Components);
+		for (const UInstancedStaticMeshComponent* Component : Components)
+		{
+			const UStaticMesh* Mesh = Component->GetStaticMesh();
+			const UMaterialInterface* Material = Component->GetMaterial(0);
+			const FString Type = FString::Printf(TEXT("%s / %s"), Mesh ? *Mesh->GetName() : TEXT("-"), Material ? *Material->GetName() : TEXT("-"));
+			const uint32 TypeHash = GetTypeHash(Type);
+
+			const int32 NumInstances = Component->GetInstanceCount();
+			PerType.FindOrAdd(Type) += NumInstances;
+			Stats.TotalInstances += NumInstances;
+
+			for (int32 Index = 0; Index < NumInstances; ++Index)
+			{
+				FTransform Transform;
+				Component->GetInstanceTransform(Index, Transform, /*bWorldSpace=*/true);
+
+				// Rounded to cm, tenths of a degree and thousandths of scale: tiny float noise does not count
+				const FVector Location = Transform.GetLocation();
+				const FRotator Rotation = Transform.Rotator();
+				const FVector Scale = Transform.GetScale3D();
+				uint32 Hash = HashCombine(TypeHash, GetTypeHash(FIntVector(FMath::RoundToInt32(Location.X), FMath::RoundToInt32(Location.Y), FMath::RoundToInt32(Location.Z))));
+				Hash = HashCombine(Hash, GetTypeHash(FIntVector(FMath::RoundToInt32(Rotation.Pitch * 10.0), FMath::RoundToInt32(Rotation.Yaw * 10.0), FMath::RoundToInt32(Rotation.Roll * 10.0))));
+				Hash = HashCombine(Hash, GetTypeHash(FIntVector(FMath::RoundToInt32(Scale.X * 1000.0), FMath::RoundToInt32(Scale.Y * 1000.0), FMath::RoundToInt32(Scale.Z * 1000.0))));
+
+				// A sum does not depend on the order of components or instances
+				HashSum += Hash;
+			}
+		}
+	}
+
+	for (const TPair<FString, int32>& Pair : PerType)
+	{
+		Stats.InstancesPerType.Add(Pair);
+	}
+	Stats.InstancesPerType.Sort([](const TPair<FString, int32>& A, const TPair<FString, int32>& B) { return A.Key < B.Key; });
+	Stats.Fingerprint = static_cast<uint32>(HashSum ^ (HashSum >> 32));
+	return Stats;
 }
 
 #undef LOCTEXT_NAMESPACE
