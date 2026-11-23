@@ -1,7 +1,12 @@
 # Grafos PCG de la ciudad
 
-Este documento describe, nodo a nodo, los grafos que hay en `Content/City`. Sirve para dos cosas:
-montarlos desde cero y entender qué hace cada uno antes de ampliarlo.
+Este documento describe, nodo a nodo, los grafos que hay en `Content/City`. Sirve para entender qué
+hace cada uno antes de ampliarlo, o para montarlos a mano.
+
+**Todo este contenido lo crea el botón *Crear contenido* del panel** (código en
+`Source/EgoitzPineiroTools/Private/CityContentBuilder.cpp`). El botón solo crea lo que falta: para
+rehacer un asset, bórralo en el Content Browser y vuelve a pulsarlo. Si algo no encaja con la versión
+del motor, el panel muestra el error con el nombre de la propiedad o del pin que falla.
 
 La lógica que depende de bucles y de geometría (rejilla, tramos, manzanas, parcelas, forma de los
 edificios y huecos de acera) está en los nodos C++ del módulo `EgoitzPineiroToolsRuntime`. Las
@@ -66,8 +71,9 @@ Content/City/
 
 ## 2. Mallas de mobiliario
 
-Las dos mallas se construyen con formas básicas y *Merge Actors*. Lo importante es que el **pivote quede
-en la base** (Z = 0): los puntos de acera están a la altura de la acera y la malla se apoya en ellos.
+El botón construye las dos mallas por código: un cilindro y un elipsoide cada una, con el **pivote en la
+base** (Z = 0), porque los puntos de acera están a la altura de la acera y la malla se apoya en ellos.
+A mano se pueden hacer igual con formas básicas y *Merge Actors*:
 
 **`SM_StreetLamp`**
 
