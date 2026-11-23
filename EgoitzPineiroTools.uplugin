@@ -2,10 +2,10 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "1.0",
-	"FriendlyName": "EgoitzPineiroTools",
-	"Description": "",
-	"Category": "Other",
-	"CreatedBy": "",
+	"FriendlyName": "EgoitzPineiroTools - City Generator",
+	"Description": "Procedural city generator built on PCG, with its own editor panel to configure, generate and clean up cities.",
+	"Category": "Procedural",
+	"CreatedBy": "Egoitz Pineiro",
 	"CreatedByURL": "",
 	"DocsURL": "",
 	"MarketplaceURL": "",
@@ -13,5 +13,18 @@
 	"CanContainContent": true,
 	"IsBetaVersion": false,
 	"IsExperimentalVersion": false,
-	"Installed": false
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "EgoitzPineiroToolsRuntime",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "PCG",
+			"Enabled": true
+		}
+	]
 }
