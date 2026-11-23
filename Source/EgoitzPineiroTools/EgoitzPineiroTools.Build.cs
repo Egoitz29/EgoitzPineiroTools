@@ -16,7 +16,9 @@ public class EgoitzPineiroTools : ModuleRules
 		{
 			"CoreUObject",
 			"Engine",
+			"AssetRegistry",
 			"InputCore",
+			"MaterialEditor",
 			"Slate",
 			"SlateCore",
 			"UnrealEd",

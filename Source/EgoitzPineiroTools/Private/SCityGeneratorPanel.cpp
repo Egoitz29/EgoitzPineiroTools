@@ -1,5 +1,6 @@
 ﻿#include "SCityGeneratorPanel.h"
 
+#include "CityContentBuilder.h"
 #include "CityGeneratorTool.h"
 #include "HAL/PlatformTime.h"
 #include "Styling/CoreStyle.h"
@@ -63,10 +64,27 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 				.Text(LOCTEXT("Intro", "Ajusta los parámetros y pulsa Generar. Misma seed y mismos parámetros, misma ciudad."))
 				.AutoWrapText(true)
 			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
+
+			// Plugin content: materials, meshes and graphs
+			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("ContentSection", "Contenido")) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
 			[
 				SNew(STextBlock)
 				.Text(this, &SCityGeneratorPanel::GetGraphStatusText)
+				.AutoWrapText(true)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+			[
+				SNew(SButton)
+				.HAlign(HAlign_Center)
+				.Text(LOCTEXT("CreateContent", "Crear contenido"))
+				.ToolTipText(LOCTEXT("CreateContentTip", "Crea en Content/City lo que falte: materiales, mallas y grafos. Lo que ya existe no se toca."))
+				.OnClicked(this, &SCityGeneratorPanel::OnCreateContentClicked)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() { return ContentText; })
 				.AutoWrapText(true)
 			]
 
@@ -213,6 +231,13 @@ FReply SCityGeneratorPanel::OnRandomSeedClicked()
 {
 	Tool->Params.Seed = FMath::RandRange(0, 9999999); // only picks the number: the city still comes from it
 	OnParameterCommitted();
+	return FReply::Handled();
+}
+
+FReply SCityGeneratorPanel::OnCreateContentClicked()
+{
+	ContentText = FCityContentBuilder::Build().ToText();
+	NextGraphCheckTime = 0.0;
 	return FReply::Handled();
 }
 

@@ -30,6 +30,7 @@ private:
 	FReply OnGenerateClicked();
 	FReply OnCleanupClicked();
 	FReply OnRandomSeedClicked();
+	FReply OnCreateContentClicked();
 	/** A value was typed or a slider released: regenerate if live updates are on. */
 	void OnParameterCommitted();
 	FText GetGraphStatusText() const;
@@ -37,6 +38,7 @@ private:
 
 	TSharedPtr<FCityGeneratorTool> Tool;
 	FText StatusText;
+	FText ContentText;
 	FCityStats CachedStats;
 	double NextStatsRefreshTime = 0.0;
 	bool bAutoRegenerate = false;
