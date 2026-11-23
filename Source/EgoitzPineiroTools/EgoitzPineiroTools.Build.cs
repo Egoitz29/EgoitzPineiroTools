@@ -19,6 +19,8 @@ public class EgoitzPineiroTools : ModuleRules
 			"AssetRegistry",
 			"InputCore",
 			"MaterialEditor",
+			"MeshDescription",
+			"StaticMeshDescription",
 			"Slate",
 			"SlateCore",
 			"UnrealEd",

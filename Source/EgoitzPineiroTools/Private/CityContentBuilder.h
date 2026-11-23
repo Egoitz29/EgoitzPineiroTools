@@ -27,11 +27,13 @@ public:
 	/** Root of the generated content and its sub-folders (long package paths). */
 	static const TCHAR* RootPath;
 	static const TCHAR* MaterialsPath;
+	static const TCHAR* MeshesPath;
 
 private:
 	explicit FCityContentBuilder(FReport& InReport) : Report(InReport) {}
 
 	void BuildMaterials();
+	void BuildMeshes();
 	void SaveAll();
 
 	/** Asset at PackageName if it exists (on disk or in memory), loaded. */
