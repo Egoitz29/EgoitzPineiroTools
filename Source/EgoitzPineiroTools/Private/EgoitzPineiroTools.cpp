@@ -1,12 +1,13 @@
 #include "EgoitzPineiroTools.h"
 
 #include "Brushes/SlateImageBrush.h"
+#include "CityGeneratorTool.h"
 #include "Interfaces/IPluginManager.h"
+#include "SCityGeneratorPanel.h"
 #include "Styling/SlateStyle.h"
 #include "Styling/SlateStyleRegistry.h"
 #include "ToolMenus.h"
 #include "Widgets/Docking/SDockTab.h"
-#include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "FEgoitzPineiroToolsModule"
 
@@ -19,6 +20,7 @@ namespace
 
 void FEgoitzPineiroToolsModule::StartupModule()
 {
+	CityTool = MakeShared<FCityGeneratorTool>();
 	RegisterStyle();
 
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(CityGeneratorTabName,
@@ -42,6 +44,8 @@ void FEgoitzPineiroToolsModule::ShutdownModule()
 		FSlateStyleRegistry::UnRegisterSlateStyle(*StyleSet);
 		StyleSet.Reset();
 	}
+
+	CityTool.Reset();
 }
 
 void FEgoitzPineiroToolsModule::RegisterStyle()
@@ -95,8 +99,8 @@ TSharedRef<SDockTab> FEgoitzPineiroToolsModule::OnSpawnCityGeneratorTab(const FS
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
 		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("Placeholder", "Generador de ciudades: el panel llega en el siguiente commit."))
+			SNew(SCityGeneratorPanel)
+			.Tool(CityTool)
 		];
 }
 

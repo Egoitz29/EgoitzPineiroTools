@@ -4,6 +4,7 @@
 #include "Framework/Docking/TabManager.h"
 #include "Modules/ModuleManager.h"
 
+class FCityGeneratorTool;
 class FSlateStyleSet;
 class SDockTab;
 
@@ -22,6 +23,9 @@ private:
 	void RegisterMenus();
 	void OpenCityGeneratorTab();
 	TSharedRef<SDockTab> OnSpawnCityGeneratorTab(const FSpawnTabArgs& Args);
+
+	/** Parameters and actions of the tool. Lives as long as the module, so the values survive closing the tab. */
+	TSharedPtr<FCityGeneratorTool> CityTool;
 
 	/** Icon of the tab, the menu entry and the toolbar button (Resources/Icon128.png). */
 	TSharedPtr<FSlateStyleSet> StyleSet;
