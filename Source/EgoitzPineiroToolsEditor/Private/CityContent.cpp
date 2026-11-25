@@ -5,6 +5,7 @@
 #include "CityPCG/CityPCGNames.h"
 #include "CityPCG/PCGCityBuildings.h"
 #include "CityPCG/PCGCityLots.h"
+#include "CityPCG/PCGCityPark.h"
 #include "CityPCG/PCGCitySidewalkPoints.h"
 #include "CityPCG/PCGCityStreetGrid.h"
 #include "Engine/StaticMesh.h"
@@ -35,7 +36,7 @@ namespace
 	FString SubgraphPackage(const TCHAR* Name) { return FString(FCityContent::RootPath) / TEXT("Subgraphs") / Name; }
 	FString CityGraphPackage() { return FString(FCityContent::RootPath) / TEXT("PCG_City"); }
 
-	const TCHAR* const SubgraphNames[] = { TEXT("SG_Streets"), TEXT("SG_Blocks"), TEXT("SG_Buildings"), TEXT("SG_StreetLamps"), TEXT("SG_Trees") };
+	const TCHAR* const SubgraphNames[] = { TEXT("SG_Streets"), TEXT("SG_Blocks"), TEXT("SG_Buildings"), TEXT("SG_StreetLamps"), TEXT("SG_Trees"), TEXT("SG_Parks") };
 
 	FString ObjectPathOf(const FString& PackageName)
 	{
@@ -60,6 +61,8 @@ namespace
 		{ TEXT("MI_LampLight"), FLinearColor(1.00f, 0.85f, 0.45f) },
 		{ TEXT("MI_TreeTrunk"), FLinearColor(0.25f, 0.15f, 0.08f) },
 		{ TEXT("MI_TreeLeaves"), FLinearColor(0.10f, 0.35f, 0.10f) },
+		{ TEXT("MI_Grass"), FLinearColor(0.16f, 0.40f, 0.12f) },
+		{ TEXT("MI_Bush"), FLinearColor(0.06f, 0.24f, 0.07f) },
 	};
 
 	/**
@@ -454,6 +457,17 @@ namespace
 		TFunction<void(const FString&)> OnError;
 	};
 
+	/** Text for the Mesh Entries of a Static Mesh Spawner: one entry per mesh, with its weight and the mesh's own materials. */
+	FString WeightedMeshEntriesText(const TArray<TPair<FString, int32>>& MeshesAndWeights)
+	{
+		TArray<FString> Entries;
+		for (const TPair<FString, int32>& Mesh : MeshesAndWeights)
+		{
+			Entries.Add(FString::Printf(TEXT("(Descriptor=(StaticMesh=\"%s\"),Weight=%d)"), *Mesh.Key, Mesh.Value));
+		}
+		return TEXT("(") + FString::Join(Entries, TEXT(",")) + TEXT(")");
+	}
+
 	/** Text for the Mesh Entries of a Static Mesh Spawner: one entry per (mesh, material), weight 1. */
 	FString MeshEntriesText(const FString& MeshPath, const TArray<FString>& MaterialPaths)
 	{
@@ -642,6 +656,13 @@ void FCityContent::BuildMeshes()
 		Mesh.AddCylinder(Groups[0], FVector::ZeroVector, 10.0, 200.0, 8);
 		Mesh.AddEllipsoid(Groups[1], FVector(0.0, 0.0, 310.0), FVector(110.0, 110.0, 130.0), 8, 12);
 	});
+
+	// Bush: a low, wide ellipsoid, 1.2 m tall
+	const FSlot BushSlots[] = { { TEXT("Leaves"), TEXT("MI_Bush") } };
+	BuildMesh(TEXT("SM_Bush"), BushSlots, [](FSimpleMeshBuilder& Mesh, TArrayView<const FPolygonGroupID> Groups)
+	{
+		Mesh.AddEllipsoid(Groups[0], FVector(0.0, 0.0, 55.0), FVector(90.0, 90.0, 65.0), 6, 12);
+	});
 }
 
 bool FCityContent::AreGraphsUpToDate() const
@@ -707,8 +728,9 @@ void FCityContent::BuildGraphs()
 		return Spawner;
 	};
 
-	// Every subgraph starts the same way: CitySize and BlockSize into a City Street Grid node
-	auto AddStreetGrid = [](FGraphWriter& Writer)
+	// Every subgraph starts the same way: CitySize and BlockSize into a City Street Grid node.
+	// The subgraphs that use UrbanBlocks or ParkBlocks also need ParkRatio, so all of them agree.
+	auto AddStreetGrid = [](FGraphWriter& Writer, bool bUsesParks = false)
 	{
 		Writer.AddParameter(Param::CitySize, 400.0);
 		Writer.AddParameter(Param::BlockSize, 60.0);
@@ -717,6 +739,11 @@ void FCityContent::BuildGraphs()
 		UPCGNode* Grid = Writer.Add(UPCGCityStreetGridSettings::StaticClass(), -750, 0);
 		Writer.ConnectParameter(GetCitySize, Grid, Param::CitySize);
 		Writer.ConnectParameter(GetBlockSize, Grid, Param::BlockSize);
+		if (bUsesParks)
+		{
+			Writer.AddParameter(Param::ParkRatio, 0.15);
+			Writer.ConnectParameter(Writer.AddGetParameter(Param::ParkRatio, -1100, 250), Grid, Param::ParkRatio);
+		}
 		return Grid;
 	};
 
@@ -758,7 +785,7 @@ void FCityContent::BuildGraphs()
 	{
 		FGraphWriter Writer(Buildings, OnError);
 		PlaceInputOutput(Writer, -1400, 1800);
-		UPCGNode* Grid = AddStreetGrid(Writer);
+		UPCGNode* Grid = AddStreetGrid(Writer, /*bUsesParks=*/true);
 		Writer.AddParameter(Param::BuildingDensity, 0.6);
 		Writer.AddParameter(Param::BuildingHeight, 30.0);
 		Writer.AddParameter(Param::BuildingVariation, 0.5);
@@ -785,7 +812,7 @@ void FCityContent::BuildGraphs()
 		UPCGNode* Spawner = AddSpawner(Writer, 1350, 0, MeshEntriesText(Cube,
 			{ MaterialPath(TEXT("MI_Building_A")), MaterialPath(TEXT("MI_Building_B")), MaterialPath(TEXT("MI_Building_C")) }));
 
-		Writer.Connect(Grid, BlocksPin, Lots, BlocksPin);
+		Writer.Connect(Grid, UrbanBlocksPin, Lots, BlocksPin); // parks get no buildings
 		Writer.ConnectParameter(GetDensity, Lots, Param::BuildingDensity);
 		Writer.ConnectParameter(GetHeight, CityBuildings, Param::BuildingHeight);
 		Writer.ConnectParameter(GetVariation, CityBuildings, Param::BuildingVariation);
@@ -829,6 +856,38 @@ void FCityContent::BuildGraphs()
 		Writer.Chain(Points, PointsPin, { { Variation, In, Out }, { Spawner, In, Out } });
 	}
 
+	// --- SG_Parks: lawn, trees and bushes on the park blocks -------------------------------------------
+	UPCGGraph* Parks = StartGraph(SubgraphPackage(TEXT("SG_Parks")));
+	{
+		FGraphWriter Writer(Parks, OnError);
+		PlaceInputOutput(Writer, -1400, 1100);
+		UPCGNode* Grid = AddStreetGrid(Writer, /*bUsesParks=*/true);
+		Writer.AddParameter(Param::ParkTreeDensity, 0.6);
+		Writer.AddParameter(Param::ParkTreeScaleVariation, 0.4);
+
+		UPCGNode* GetTreeDensity = Writer.AddGetParameter(Param::ParkTreeDensity, -750, 300);
+		UPCGNode* GetScaleVariation = Writer.AddGetParameter(Param::ParkTreeScaleVariation, -750, 450);
+		UPCGNode* ParkNode = Writer.Add(UPCGCityParkSettings::StaticClass(), -400, 0);
+		UPCGNode* LawnSpawner = AddSpawner(Writer, 0, -200, MeshEntriesText(Cube, { MaterialPath(TEXT("MI_Grass")) }));
+
+		// Random yaw for every plant; its size already comes from City Park
+		UPCGNode* Rotation = Writer.AddStandard(TEXT("PCGTransformPointsSettings"), 0, 150);
+		Writer.Set(Rotation, TEXT("RotationMax"), TEXT("(Pitch=0.0,Yaw=360.0,Roll=0.0)"));
+		Writer.Refresh(Rotation);
+
+		// Two trees for every bush, chosen from the seed
+		TArray<TPair<FString, int32>> PlantMeshes;
+		PlantMeshes.Emplace(MeshPath(TEXT("SM_Tree")), 2);
+		PlantMeshes.Emplace(MeshPath(TEXT("SM_Bush")), 1);
+		UPCGNode* PlantSpawner = AddSpawner(Writer, 350, 150, WeightedMeshEntriesText(PlantMeshes));
+
+		Writer.Connect(Grid, ParkBlocksPin, ParkNode, BlocksPin);
+		Writer.ConnectParameter(GetTreeDensity, ParkNode, TEXT("TreeDensity"));
+		Writer.ConnectParameter(GetScaleVariation, ParkNode, TEXT("ScaleVariation"));
+		Writer.Chain(ParkNode, LawnsPin, { { LawnSpawner, In, Out } });
+		Writer.Chain(ParkNode, PlantsPin, { { Rotation, In, Out }, { PlantSpawner, In, Out } });
+	}
+
 	// --- PCG_City: only runs the subgraphs and passes the parameters down -------------------------
 	UPCGGraph* City = StartGraph(CityGraphPackage());
 	{
@@ -839,34 +898,47 @@ void FCityContent::BuildGraphs()
 		Writer.AddParameter(Param::BuildingDensity, 0.6);
 		Writer.AddParameter(Param::BuildingHeight, 30.0);
 		Writer.AddParameter(Param::BuildingVariation, 0.5);
+		Writer.AddParameter(Param::ParkRatio, 0.15);
+		Writer.AddParameter(Param::ParkTreeDensity, 0.6);
+		Writer.AddParameter(Param::ParkTreeScaleVariation, 0.4);
 		Writer.AddParameter(Param::GraphVersion, 0.0); // the real version is written at the end, only if all went well
 
-		UPCGNode* GetCitySize = Writer.AddGetParameter(Param::CitySize, -800, -200);
-		UPCGNode* GetBlockSize = Writer.AddGetParameter(Param::BlockSize, -800, -50);
-		UPCGNode* GetDensity = Writer.AddGetParameter(Param::BuildingDensity, -800, 100);
-		UPCGNode* GetHeight = Writer.AddGetParameter(Param::BuildingHeight, -800, 250);
-		UPCGNode* GetVariation = Writer.AddGetParameter(Param::BuildingVariation, -800, 400);
+		// One Get Graph Parameter node per parameter, shared by every subgraph that needs it
+		const FName AllParams[] = { Param::CitySize, Param::BlockSize, Param::BuildingDensity, Param::BuildingHeight,
+			Param::BuildingVariation, Param::ParkRatio, Param::ParkTreeDensity, Param::ParkTreeScaleVariation };
+		TMap<FName, UPCGNode*> GetNodes;
+		int32 GetY = -400;
+		for (const FName& Name : AllParams)
+		{
+			GetNodes.Add(Name, Writer.AddGetParameter(Name, -800, GetY));
+			GetY += 150;
+		}
 
+		// Each subgraph and the parameters it receives (they are the Graph Parameters it has)
 		struct FSystem
 		{
 			UPCGGraph* Graph;
-			bool bBuildings;
+			TArray<FName> Params;
 		};
-		const FSystem Systems[] = { { Streets, false }, { Blocks, false }, { Buildings, true }, { StreetLamps, false }, { Trees, false } };
+		const FSystem Systems[] =
+		{
+			{ Streets, { Param::CitySize, Param::BlockSize } },
+			{ Blocks, { Param::CitySize, Param::BlockSize } },
+			{ Buildings, { Param::CitySize, Param::BlockSize, Param::ParkRatio, Param::BuildingDensity, Param::BuildingHeight, Param::BuildingVariation } },
+			{ StreetLamps, { Param::CitySize, Param::BlockSize } },
+			{ Trees, { Param::CitySize, Param::BlockSize } },
+			{ Parks, { Param::CitySize, Param::BlockSize, Param::ParkRatio, Param::ParkTreeDensity, Param::ParkTreeScaleVariation } },
+		};
 
-		int32 Y = -300;
+		int32 Y = -400;
 		for (const FSystem& System : Systems)
 		{
 			UPCGNode* Node = Writer.AddStandard(TEXT("PCGSubgraphSettings"), 300, Y);
 			Y += 200;
 			Writer.SetSubgraph(Node, System.Graph);
-			Writer.ConnectParameter(GetCitySize, Node, Param::CitySize);
-			Writer.ConnectParameter(GetBlockSize, Node, Param::BlockSize);
-			if (System.bBuildings)
+			for (const FName& Name : System.Params)
 			{
-				Writer.ConnectParameter(GetDensity, Node, Param::BuildingDensity);
-				Writer.ConnectParameter(GetHeight, Node, Param::BuildingHeight);
-				Writer.ConnectParameter(GetVariation, Node, Param::BuildingVariation);
+				Writer.ConnectParameter(GetNodes.FindRef(Name), Node, Name);
 			}
 		}
 

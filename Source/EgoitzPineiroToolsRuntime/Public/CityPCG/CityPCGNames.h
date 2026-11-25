@@ -11,6 +11,10 @@ namespace CityPCGNames
 	// Pins
 	inline const FName RoadsPin = TEXT("Roads");
 	inline const FName BlocksPin = TEXT("Blocks");
+	inline const FName UrbanBlocksPin = TEXT("UrbanBlocks");
+	inline const FName ParkBlocksPin = TEXT("ParkBlocks");
+	inline const FName LawnsPin = TEXT("Lawns");
+	inline const FName PlantsPin = TEXT("Plants");
 	inline const FName LotsPin = TEXT("Lots");
 	inline const FName BuildingsPin = TEXT("Buildings");
 	inline const FName PointsPin = TEXT("Points");
@@ -21,6 +25,7 @@ namespace CityPCGNames
 	inline const FName Col = TEXT("Col");           // int32: column in the street grid
 	inline const FName Row = TEXT("Row");           // int32: row in the street grid
 	inline const FName BlockID = TEXT("BlockID");   // int32: block a point belongs to
+	inline const FName Park = TEXT("Park");         // int32: 1 if the block is a park, 0 if it is built
 	inline const FName Side = TEXT("Side");         // int32: side of the block (0 south, 1 east, 2 north, 3 west)
 	inline const FName Height = TEXT("Height");     // double: building height in metres
 	inline const FName Floors = TEXT("Floors");     // int32: building floors (3.5 m each)

@@ -108,6 +108,27 @@ void SCityPanel::Construct(const FArguments& InArgs)
 					Params.BuildingVariation, 0.0, 1.0, 0.05)
 			]
 
+			// --- Parks
+			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("ParksSection", "Parques")) ]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				MakeParameterRow(LOCTEXT("ParkRatio", "Manzanas que son parque (0-1)"),
+					LOCTEXT("ParkRatioTip", "Parte de las manzanas que se convierten en parque en lugar de edificarse."),
+					Params.ParkRatio, 0.0, 1.0, 0.05)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				MakeParameterRow(LOCTEXT("ParkTreeDensity", "Densidad de árboles (0-1)"),
+					LOCTEXT("ParkTreeDensityTip", "Parte de los huecos del parque (uno cada 6 m) que tienen un árbol o un arbusto."),
+					Params.ParkTreeDensity, 0.0, 1.0, 0.05)
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				MakeParameterRow(LOCTEXT("ParkTreeScale", "Variación de escala (0-1)"),
+					LOCTEXT("ParkTreeScaleTip", "0 = toda la vegetación del mismo tamaño. 1 = de la mitad a una vez y media."),
+					Params.ParkTreeScaleVariation, 0.0, 1.0, 0.05)
+			]
+
 			// --- Seed
 			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("SeedSection", "Semilla")) ]
 			+ SVerticalBox::Slot().AutoHeight()

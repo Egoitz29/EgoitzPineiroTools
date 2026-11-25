@@ -29,7 +29,7 @@ public:
 	};
 
 	/** Version of the graphs this code builds. Increase it whenever BuildGraphs changes. */
-	static constexpr int32 GraphVersion = 1;
+	static constexpr int32 GraphVersion = 2;
 
 	/** Root of the generated content (long package path) and the main graph inside it. */
 	static const TCHAR* RootPath;

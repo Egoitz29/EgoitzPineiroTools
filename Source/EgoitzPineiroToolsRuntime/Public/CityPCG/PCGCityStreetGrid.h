@@ -6,12 +6,15 @@
 /**
  * First layer of the city: the street grid and the blocks between the streets (FCityGrid).
  *
- * Roads:  one box per crossing (StreetWidth x StreetWidth) and one per street between two
- *         crossings. Attributes RoadKind, Axis, Col, Row.
- * Blocks: one box per gap between four crossings, BlockSize x BlockSize, raised SidewalkHeight
- *         (it is the sidewalk slab). Attributes BlockID, Col, Row.
+ * Roads:       one box per crossing (StreetWidth x StreetWidth) and one per street between two
+ *              crossings. Attributes RoadKind, Axis, Col, Row.
+ * Blocks:      one box per gap between four crossings, BlockSize x BlockSize, raised SidewalkHeight
+ *              (it is the sidewalk slab). Attributes BlockID, Col, Row, Park.
+ * UrbanBlocks: the blocks that get buildings.
+ * ParkBlocks:  the blocks that are parks. Each block is a park with probability ParkRatio, decided
+ *              from the seed and the block position, so every subgraph agrees on which ones.
  *
- * Blocks touch the roads but never overlap them. Every other layer starts from Blocks.
+ * Blocks touch the roads but never overlap them. Every other layer starts from the blocks.
  */
 UCLASS(BlueprintType, ClassGroup = (Procedural))
 class EGOITZPINEIROTOOLSRUNTIME_API UPCGCityStreetGridSettings : public UPCGSettings
@@ -25,6 +28,8 @@ public:
 	virtual FText GetNodeTooltipText() const override;
 	virtual EPCGSettingsType GetType() const override { return EPCGSettingsType::Sampler; }
 #endif
+
+	virtual bool UseSeed() const override { return true; }
 
 protected:
 	virtual TArray<FPCGPinProperties> InputPinProperties() const override;
@@ -51,6 +56,10 @@ public:
 	/** Height of the blocks above the road (the kerb), in metres. */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.01", ForceUnits = "m"))
 	double SidewalkHeight = 0.15;
+
+	/** Share of the blocks that are parks instead of buildings (0 - 1). Connect the ParkRatio Graph Parameter here. */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.0", ClampMax = "1.0"))
+	double ParkRatio = 0.0;
 };
 
 class FPCGCityStreetGridElement : public IPCGElement

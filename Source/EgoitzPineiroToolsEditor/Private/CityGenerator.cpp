@@ -103,6 +103,9 @@ bool FCityGenerator::Generate(bool bFullRebuild, FText& OutMessage)
 	SetParameter(CityParamNames::BuildingDensity, Params.BuildingDensity);
 	SetParameter(CityParamNames::BuildingHeight, Params.BuildingHeight);
 	SetParameter(CityParamNames::BuildingVariation, Params.BuildingVariation);
+	SetParameter(CityParamNames::ParkRatio, Params.ParkRatio);
+	SetParameter(CityParamNames::ParkTreeDensity, Params.ParkTreeDensity);
+	SetParameter(CityParamNames::ParkTreeScaleVariation, Params.ParkTreeScaleVariation);
 
 	PCG->Seed = Params.Seed;
 	PCG->GenerateLocal(/*bForce=*/true);

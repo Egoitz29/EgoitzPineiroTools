@@ -1,7 +1,7 @@
 # EgoitzPineiroTools · Generador procedural de ciudades
 
 Plugin de Unreal Engine 5.8 que genera ciudades pequeñas con el PCG Framework: red de calles, manzanas
-con acera, edificios, farolas y árboles. Los ingenieros de escenarios lo manejan desde un panel propio del
+con acera, edificios, parques, farolas y árboles. Los ingenieros de escenarios lo manejan desde un panel propio del
 editor, sin abrir ningún grafo. Con la misma seed y los mismos parámetros sale siempre la misma ciudad.
 
 ## Instalación
@@ -44,7 +44,10 @@ todas las instancias. Dos ciudades con la misma huella son la misma ciudad.
 | Densidad (0-1) | `BuildingDensity` | 0 – 1 | Parte de las parcelas que se construyen: 0 es una zona abierta y 1, un cañón urbano. |
 | Altura media (m) | `BuildingHeight` | 3 – 300 | Altura media de los edificios. |
 | Variación (0-1) | `BuildingVariation` | 0 – 1 | Diferencia entre edificios: altura ±75 %, huella entre el 85 % y el 55 % de la parcela y desplazamiento dentro de ella. Con 0, todos iguales. |
-| Seed | *Seed* del PCG Component | 0 – 9 999 999 | Identifica el escenario. Cambia qué parcelas se construyen, la forma, la posición, el giro y el color de los edificios, y el giro y el tamaño de los árboles. |
+| Manzanas que son parque (0-1) | `ParkRatio` | 0 – 1 | Parte de las manzanas que son parque en lugar de edificarse. |
+| Densidad de árboles (0-1) | `ParkTreeDensity` | 0 – 1 | Parte de los huecos del parque (uno cada 6 m) que tienen un árbol o un arbusto. |
+| Variación de escala (0-1) | `ParkTreeScaleVariation` | 0 – 1 | Diferencia de tamaño de la vegetación de los parques: con 1, de la mitad a una vez y media. |
+| Seed | *Seed* del PCG Component | 0 – 9 999 999 | Identifica el escenario. Cambia qué manzanas son parque, qué parcelas se construyen, la forma, la posición, el giro y el color de los edificios, y la vegetación. |
 
 Constantes, en las propiedades de cada nodo (en metros): calle 8, acera 3, bordillo 0.15, fondo de
 parcela 18, frente de parcela ≈ 15, farolas cada 24 y árboles cada 24 (desfasados 12), a 6 de las esquinas.
@@ -56,23 +59,32 @@ PCG_City ── pasa los parámetros a cada subgrafo ──┬─► SG_Streets 
                                                    ├─► SG_Blocks       manzanas (acera)
                                                    ├─► SG_Buildings    edificios
                                                    ├─► SG_StreetLamps  farolas
-                                                   └─► SG_Trees        árboles
+                                                   ├─► SG_Trees        árboles de las aceras
+                                                   └─► SG_Parks        césped, árboles y arbustos
 
-Cada subgrafo empieza igual:  CitySize, BlockSize ─► City Street Grid ─► Roads / Blocks
+Cada subgrafo empieza igual:  CitySize, BlockSize (y ParkRatio) ─► City Street Grid ─► Roads / Blocks / UrbanBlocks / ParkBlocks
 
-SG_Buildings:  Blocks ─► City Lots ─► Density Filter ─► City Buildings ─► Transform Points ─► Self Pruning ─► Static Mesh Spawner
+SG_Buildings:  UrbanBlocks ─► City Lots ─► Density Filter ─► City Buildings ─► Transform Points ─► Self Pruning ─► Static Mesh Spawner
 SG_Trees:      Blocks ─► City Sidewalk Points ─► Transform Points ─► Static Mesh Spawner
+SG_Parks:      ParkBlocks ─► City Park ─┬─► Lawns ─► Static Mesh Spawner (césped)
+                                        └─► Plants ─► Transform Points ─► Static Mesh Spawner (árbol o arbusto)
 ```
 
 - **Calles y manzanas.** *City Street Grid* calcula una retícula de cruces centrada en el origen
   (`FCityGrid`). Saca dos conjuntos de puntos: `Roads` (un cruce en cada nudo y una calle entre cada dos
   cruces, sin solapes) y `Blocks` (el hueco entre cuatro cruces). Las manzanas salen de las calles, así que
-  nunca las invaden.
-- **Edificios.** *City Lots* reparte el borde interior de cada manzana (dentro de la acera) en parcelas
+  nunca las invaden. Con la seed decide además qué manzanas son parque (`ParkRatio`) y las separa en
+  `UrbanBlocks` y `ParkBlocks`. Como la decisión depende solo de la seed y de la posición de la manzana,
+  todos los subgrafos coinciden en cuáles son.
+- **Edificios.** Solo en las `UrbanBlocks`. *City Lots* reparte el borde interior de cada manzana (dentro de la acera) en parcelas
   que dan a la calle, y le pone a cada una un `$Density` con la seed. Un *Density Filter* estándar
   (0.5 – 1) deja pasar el porcentaje `BuildingDensity`. *City Buildings* calcula la altura, la huella y la
   posición de cada edificio dentro de su parcela. *Transform Points* le da unos grados de giro,
   *Self Pruning* elimina cualquier solape y *Static Mesh Spawner* elige uno de tres materiales.
+- **Parques.** *City Park* cubre cada `ParkBlock` de césped y prepara un hueco cada 6 m, algo desplazado.
+  Cada hueco tiene planta con probabilidad `ParkTreeDensity` y un tamaño que varía según
+  `ParkTreeScaleVariation`. *Transform Points* gira cada planta y el *Static Mesh Spawner* elige entre árbol
+  y arbusto (dos árboles por cada arbusto), siempre con la seed.
 - **Mobiliario.** *City Sidewalk Points* pone puntos a lo largo de las aceras, mirando a la calle y a
   6 m de las esquinas, para que nunca caigan en un cruce. Las farolas van cerca del bordillo y los
   árboles, a medio camino entre farola y farola (`Phase` 0.5), con giro y tamaño aleatorios.
@@ -86,7 +98,8 @@ los demás. El detalle nodo a nodo está en [`Docs/Grafos.md`](Docs/Grafos.md).
 ### Determinismo
 
 Fuera de PCG no hay azar. Cada punto tiene un `$Seed` calculado a partir de su posición, y todos los nodos
-aleatorios (*City Lots*, *City Buildings*, *Transform Points*, *Self Pruning* y *Static Mesh Spawner*) lo
+aleatorios (*City Street Grid*, *City Lots*, *City Buildings*, *City Park*, *Transform Points*, *Self Pruning* y
+*Static Mesh Spawner*) lo
 combinan con la seed del PCG Component. Con la misma seed, cada parcela saca siempre los mismos números; con
 otra seed, las reglas son las mismas pero los valores cambian.
 
@@ -99,7 +112,7 @@ Todo lo que genera la herramienta vive dentro de un actor con el tag `EPT_CityGe
 
 `Content/CityGenerator` no se edita a mano. Lo crea `FCityContent` la primera vez que se genera una ciudad:
 
-- Materiales (`M_CityColor` y sus instancias) y mallas (`SM_StreetLamp`, `SM_Tree`): se crean si faltan.
+- Materiales (`M_CityColor` y sus instancias) y mallas (`SM_StreetLamp`, `SM_Tree`, `SM_Bush`): se crean si faltan.
 - Grafos (`PCG_City` y `Subgraphs/SG_*`): llevan la versión del código que los montó, en el parámetro
   `GraphVersion` de `PCG_City`. Si falta un grafo o la versión no coincide, se vuelven a montar todos.
   **Rehacer grafos**, en el panel, los vuelve a montar a la fuerza.

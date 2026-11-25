@@ -4,6 +4,7 @@
 #include "CityPCG/CityPCGNames.h"
 #include "CityPCGUtils.h"
 #include "Helpers/PCGHelpers.h"
+#include "Math/RandomStream.h"
 #include "PCGContext.h"
 #include "PCGPin.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -13,7 +14,7 @@
 #if WITH_EDITOR
 FText UPCGCityStreetGridSettings::GetNodeTooltipText() const
 {
-	return LOCTEXT("Tooltip", "Street grid centred on the origin: road boxes (crossings and streets) and the blocks between them.");
+	return LOCTEXT("Tooltip", "Street grid centred on the origin: road boxes (crossings and streets) and the blocks between them, split into urban blocks and parks.");
 }
 #endif
 
@@ -27,6 +28,8 @@ TArray<FPCGPinProperties> UPCGCityStreetGridSettings::OutputPinProperties() cons
 	TArray<FPCGPinProperties> Pins;
 	Pins.Emplace(CityPCGNames::RoadsPin, EPCGDataType::Point);
 	Pins.Emplace(CityPCGNames::BlocksPin, EPCGDataType::Point);
+	Pins.Emplace(CityPCGNames::UrbanBlocksPin, EPCGDataType::Point);
+	Pins.Emplace(CityPCGNames::ParkBlocksPin, EPCGDataType::Point);
 	return Pins;
 }
 
@@ -105,32 +108,70 @@ bool FPCGCityStreetGridElement::ExecuteInternal(FPCGContext* Context) const
 		CityPCG::AddOutput(Context, Roads, CityPCGNames::RoadsPin);
 	}
 
-	// --- Blocks: the N x N gaps between the streets --------------------------------------------
+	// --- Blocks: the N x N gaps between the streets, and which of them are parks ----------------
+	struct FBlock
 	{
-		UPCGBasePointData* Blocks = CityPCG::NewPoints(Context, N * N);
-		auto Transforms = Blocks->GetTransformValueRange(/*bAllocate=*/false);
-		auto Seeds = Blocks->GetSeedValueRange(/*bAllocate=*/false);
-		auto Entries = Blocks->GetMetadataEntryValueRange(/*bAllocate=*/false);
-		FPCGMetadataAttribute<int32>* BlockIDAttribute = CityPCG::CreateAttribute<int32>(Blocks, CityPCGNames::BlockID, 0);
-		FPCGMetadataAttribute<int32>* ColAttribute = CityPCG::CreateAttribute<int32>(Blocks, CityPCGNames::Col, 0);
-		FPCGMetadataAttribute<int32>* RowAttribute = CityPCG::CreateAttribute<int32>(Blocks, CityPCGNames::Row, 0);
+		FVector Center;
+		int32 BlockID;
+		int32 Col;
+		int32 Row;
+		int32 Seed;
+		bool bPark;
+	};
 
-		int32 Index = 0;
-		for (int32 Row = 0; Row < N; ++Row)
+	const double ParkRatio = FMath::Clamp(Settings->ParkRatio, 0.0, 1.0);
+	const int32 GraphSeed = Context->GetSeed(); // node seed combined with the PCG Component seed
+
+	TArray<FBlock> AllBlocks;
+	TArray<FBlock> UrbanBlocks;
+	TArray<FBlock> ParkBlocks;
+	AllBlocks.Reserve(N * N);
+	for (int32 Row = 0; Row < N; ++Row)
+	{
+		for (int32 Col = 0; Col < N; ++Col)
 		{
-			for (int32 Col = 0; Col < N; ++Col, ++Index)
-			{
-				const FVector Center(Grid.BlockCoord(Col), Grid.BlockCoord(Row), 0.5 * SidewalkHeight);
-				Transforms[Index] = CityPCG::MakeBoxTransform(Center, FVector(Grid.BlockSize, Grid.BlockSize, SidewalkHeight));
-				Seeds[Index] = PCGHelpers::ComputeSeedFromPosition(Center);
-				BlockIDAttribute->SetValue(Entries[Index], Index);
-				ColAttribute->SetValue(Entries[Index], Col);
-				RowAttribute->SetValue(Entries[Index], Row);
-			}
+			FBlock& Block = AllBlocks.AddDefaulted_GetRef();
+			Block.Center = FVector(Grid.BlockCoord(Col), Grid.BlockCoord(Row), 0.5 * SidewalkHeight);
+			Block.BlockID = AllBlocks.Num() - 1;
+			Block.Col = Col;
+			Block.Row = Row;
+			Block.Seed = PCGHelpers::ComputeSeedFromPosition(Block.Center);
+
+			// The block decides alone, from the seed and its position: the same in every subgraph
+			FRandomStream Random(PCGHelpers::ComputeSeed(GraphSeed, Block.Seed));
+			Block.bPark = Random.FRand() < ParkRatio;
+			(Block.bPark ? ParkBlocks : UrbanBlocks).Add(Block);
+		}
+	}
+
+	auto OutputBlocks = [&](const TArray<FBlock>& Blocks, FName PinLabel)
+	{
+		UPCGBasePointData* Points = CityPCG::NewPoints(Context, Blocks.Num());
+		auto Transforms = Points->GetTransformValueRange(/*bAllocate=*/false);
+		auto Seeds = Points->GetSeedValueRange(/*bAllocate=*/false);
+		auto Entries = Points->GetMetadataEntryValueRange(/*bAllocate=*/false);
+		FPCGMetadataAttribute<int32>* BlockIDAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::BlockID, 0);
+		FPCGMetadataAttribute<int32>* ColAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::Col, 0);
+		FPCGMetadataAttribute<int32>* RowAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::Row, 0);
+		FPCGMetadataAttribute<int32>* ParkAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::Park, 0);
+
+		for (int32 Index = 0; Index < Blocks.Num(); ++Index)
+		{
+			const FBlock& Block = Blocks[Index];
+			Transforms[Index] = CityPCG::MakeBoxTransform(Block.Center, FVector(Grid.BlockSize, Grid.BlockSize, SidewalkHeight));
+			Seeds[Index] = Block.Seed;
+			BlockIDAttribute->SetValue(Entries[Index], Block.BlockID);
+			ColAttribute->SetValue(Entries[Index], Block.Col);
+			RowAttribute->SetValue(Entries[Index], Block.Row);
+			ParkAttribute->SetValue(Entries[Index], Block.bPark ? 1 : 0);
 		}
 
-		CityPCG::AddOutput(Context, Blocks, CityPCGNames::BlocksPin);
-	}
+		CityPCG::AddOutput(Context, Points, PinLabel);
+	};
+
+	OutputBlocks(AllBlocks, CityPCGNames::BlocksPin);
+	OutputBlocks(UrbanBlocks, CityPCGNames::UrbanBlocksPin);
+	OutputBlocks(ParkBlocks, CityPCGNames::ParkBlocksPin);
 
 	return true;
 }
