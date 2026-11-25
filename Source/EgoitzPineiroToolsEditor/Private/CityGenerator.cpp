@@ -1,37 +1,28 @@
-﻿#include "CityGeneratorTool.h"
+#include "CityGenerator.h"
 
-#include "CityGeneratorActor.h"
+#include "CityGrid.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Editor.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInterface.h"
-#include "Misc/PackageName.h"
 #include "PCGComponent.h"
 #include "PCGGraph.h"
+#include "ProceduralCityActor.h"
 
-#define LOCTEXT_NAMESPACE "CityGeneratorTool"
+#define LOCTEXT_NAMESPACE "CityGenerator"
 
-const TCHAR* FCityGeneratorTool::GraphPackage = TEXT("/EgoitzPineiroTools/City/PCG_City");
-const TCHAR* FCityGeneratorTool::GraphObjectPath = TEXT("/EgoitzPineiroTools/City/PCG_City.PCG_City");
-
-const FName FCityGeneratorTool::CitySizeParam(TEXT("CitySize"));
-const FName FCityGeneratorTool::BlockSizeParam(TEXT("BlockSize"));
-const FName FCityGeneratorTool::BuildingDensityParam(TEXT("BuildingDensity"));
-const FName FCityGeneratorTool::BuildingHeightParam(TEXT("BuildingHeight"));
-const FName FCityGeneratorTool::BuildingVariationParam(TEXT("BuildingVariation"));
-
-UWorld* FCityGeneratorTool::GetEditorWorld()
+UWorld* FCityGenerator::GetEditorWorld()
 {
 	return GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
 }
 
-TArray<ACityGeneratorActor*> FCityGeneratorTool::FindCities(UWorld* World)
+TArray<AProceduralCityActor*> FCityGenerator::FindCities(UWorld* World)
 {
-	TArray<ACityGeneratorActor*> Cities;
+	TArray<AProceduralCityActor*> Cities;
 	if (World)
 	{
-		for (TActorIterator<ACityGeneratorActor> It(World); It; ++It)
+		for (TActorIterator<AProceduralCityActor> It(World); It; ++It)
 		{
 			Cities.Add(*It);
 		}
@@ -39,27 +30,12 @@ TArray<ACityGeneratorActor*> FCityGeneratorTool::FindCities(UWorld* World)
 	return Cities;
 }
 
-bool FCityGeneratorTool::IsGraphAvailable()
-{
-	return FPackageName::DoesPackageExist(GraphPackage);
-}
-
-bool FCityGeneratorTool::HasCity() const
+bool FCityGenerator::HasCity() const
 {
 	return FindCities(GetEditorWorld()).Num() > 0;
 }
 
-void FCityGeneratorTool::ClampParams()
-{
-	Params.CitySize = FMath::Clamp(Params.CitySize, 50.0, 3000.0);
-	Params.BlockSize = FMath::Clamp(Params.BlockSize, 15.0, 300.0);
-	Params.BuildingDensity = FMath::Clamp(Params.BuildingDensity, 0.0, 1.0);
-	Params.BuildingHeight = FMath::Clamp(Params.BuildingHeight, 3.0, 300.0);
-	Params.BuildingVariation = FMath::Clamp(Params.BuildingVariation, 0.0, 1.0);
-	Params.Seed = FMath::Max(Params.Seed, 0);
-}
-
-bool FCityGeneratorTool::Generate(bool bFullRebuild, FText& OutMessage)
+bool FCityGenerator::Generate(bool bFullRebuild, FText& OutMessage)
 {
 	UWorld* World = GetEditorWorld();
 	if (!World)
@@ -68,22 +44,28 @@ bool FCityGeneratorTool::Generate(bool bFullRebuild, FText& OutMessage)
 		return false;
 	}
 
-	UPCGGraphInterface* Graph = IsGraphAvailable() ? LoadObject<UPCGGraphInterface>(nullptr, GraphObjectPath) : nullptr;
+	Params.Clamp();
+
+	// A full rebuild starts from nothing: no leftovers of the previous city can survive
+	TArray<AProceduralCityActor*> Cities = FindCities(World);
+	const bool bNewCity = bFullRebuild || Cities.Num() != 1;
+	if (bNewCity)
+	{
+		Cleanup(); // first, so nothing regenerates while the graphs are being rebuilt
+		LastContentReport = FCityContent::Ensure(/*bRebuildGraphs=*/false);
+	}
+
+	UPCGGraphInterface* Graph = LoadObject<UPCGGraphInterface>(nullptr, *FCityContent::CityGraphObjectPath());
 	if (!Graph)
 	{
-		OutMessage = FText::Format(LOCTEXT("NoGraph", "No se encuentra el grafo {0}. Créalo siguiendo Docs/Grafos.md."), FText::FromString(GraphPackage));
+		OutMessage = FText::Format(LOCTEXT("NoGraph", "No se ha podido crear el grafo {0}. Mira los errores de contenido."), FText::FromString(FCityContent::CityGraphObjectPath()));
 		return false;
 	}
 
-	ClampParams();
-
-	// A full rebuild starts from nothing: no leftovers of the previous city can survive
-	TArray<ACityGeneratorActor*> Cities = FindCities(World);
-	ACityGeneratorActor* City = nullptr;
-	if (bFullRebuild || Cities.Num() != 1)
+	AProceduralCityActor* City = nullptr;
+	if (bNewCity)
 	{
-		Cleanup();
-		City = World->SpawnActor<ACityGeneratorActor>(FVector::ZeroVector, FRotator::ZeroRotator);
+		City = World->SpawnActor<AProceduralCityActor>(FVector::ZeroVector, FRotator::ZeroRotator);
 		if (!City)
 		{
 			OutMessage = LOCTEXT("SpawnFailed", "No se ha podido crear el actor de la ciudad.");
@@ -96,7 +78,7 @@ bool FCityGeneratorTool::Generate(bool bFullRebuild, FText& OutMessage)
 		City = Cities[0];
 	}
 
-	City->SetCitySize(Params.CitySize);
+	City->SetCityExtent(FCityGrid::Make(Params.CitySize, Params.BlockSize).Extent());
 
 	UPCGComponent* PCG = City->GetPCGComponent();
 	PCG->SetGraph(Graph);
@@ -107,7 +89,7 @@ bool FCityGeneratorTool::Generate(bool bFullRebuild, FText& OutMessage)
 		return false;
 	}
 
-	// The panel values replace the defaults of the graph. Same names and types as in PCG_City.
+	// The panel values replace the defaults of PCG_City (Graph Parameters of type Double)
 	TArray<FString> MissingParams;
 	auto SetParameter = [Instance, &MissingParams](const FName Name, double Value)
 	{
@@ -116,11 +98,11 @@ bool FCityGeneratorTool::Generate(bool bFullRebuild, FText& OutMessage)
 			MissingParams.Add(Name.ToString());
 		}
 	};
-	SetParameter(CitySizeParam, Params.CitySize);
-	SetParameter(BlockSizeParam, Params.BlockSize);
-	SetParameter(BuildingDensityParam, Params.BuildingDensity);
-	SetParameter(BuildingHeightParam, Params.BuildingHeight);
-	SetParameter(BuildingVariationParam, Params.BuildingVariation);
+	SetParameter(CityParamNames::CitySize, Params.CitySize);
+	SetParameter(CityParamNames::BlockSize, Params.BlockSize);
+	SetParameter(CityParamNames::BuildingDensity, Params.BuildingDensity);
+	SetParameter(CityParamNames::BuildingHeight, Params.BuildingHeight);
+	SetParameter(CityParamNames::BuildingVariation, Params.BuildingVariation);
 
 	PCG->Seed = Params.Seed;
 	PCG->GenerateLocal(/*bForce=*/true);
@@ -128,8 +110,13 @@ bool FCityGeneratorTool::Generate(bool bFullRebuild, FText& OutMessage)
 
 	if (!MissingParams.IsEmpty())
 	{
-		OutMessage = FText::Format(LOCTEXT("MissingParams", "Generada, pero PCG_City no tiene estos Graph Parameters de tipo Double: {0}. Esos valores no se aplican."),
+		OutMessage = FText::Format(LOCTEXT("MissingParams", "Generada, pero PCG_City no tiene estos Graph Parameters de tipo Double: {0}. Pulsa Rehacer grafos."),
 			FText::FromString(FString::Join(MissingParams, TEXT(", "))));
+		return false;
+	}
+	if (!LastContentReport.Errors.IsEmpty())
+	{
+		OutMessage = FText::Format(LOCTEXT("GeneratedWithErrors", "Ciudad generada con seed {0}, pero el contenido tiene errores (abajo)."), Params.Seed);
 		return false;
 	}
 
@@ -137,7 +124,7 @@ bool FCityGeneratorTool::Generate(bool bFullRebuild, FText& OutMessage)
 	return true;
 }
 
-int32 FCityGeneratorTool::Cleanup()
+int32 FCityGenerator::Cleanup()
 {
 	UWorld* World = GetEditorWorld();
 	if (!World)
@@ -145,11 +132,11 @@ int32 FCityGeneratorTool::Cleanup()
 		return 0;
 	}
 
-	// Everything the tool creates carries the tag: the city actor and anything spawned outside PCG
+	// Everything the tool creates carries the tag
 	TArray<AActor*> ToDestroy;
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
-		if (It->ActorHasTag(ACityGeneratorActor::GeneratedTag))
+		if (It->ActorHasTag(AProceduralCityActor::GeneratedTag))
 		{
 			ToDestroy.Add(*It);
 		}
@@ -168,13 +155,13 @@ int32 FCityGeneratorTool::Cleanup()
 	return ToDestroy.Num();
 }
 
-FCityStats FCityGeneratorTool::ComputeStats() const
+FCityStats FCityGenerator::ComputeStats() const
 {
 	FCityStats Stats;
 	TMap<FString, int32> PerType;
 	uint64 HashSum = 0;
 
-	for (ACityGeneratorActor* City : FindCities(GetEditorWorld()))
+	for (AProceduralCityActor* City : FindCities(GetEditorWorld()))
 	{
 		++Stats.NumCities;
 		if (const UPCGComponent* PCG = City->GetPCGComponent())

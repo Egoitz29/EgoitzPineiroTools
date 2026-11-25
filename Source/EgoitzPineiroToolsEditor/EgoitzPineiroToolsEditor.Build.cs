@@ -1,9 +1,10 @@
 using UnrealBuildTool;
 
-// Editor module: the City Generator panel (Slate tab, Tools menu entry and toolbar button).
-public class EgoitzPineiroTools : ModuleRules
+// Editor module: the "Generador de ciudades" panel, the content it creates and the toolbar/menu entries.
+// It never reaches a packaged build.
+public class EgoitzPineiroToolsEditor : ModuleRules
 {
-	public EgoitzPineiroTools(ReadOnlyTargetRules Target) : base(Target)
+	public EgoitzPineiroToolsEditor(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
@@ -16,6 +17,7 @@ public class EgoitzPineiroTools : ModuleRules
 		{
 			"CoreUObject",
 			"Engine",
+			"ApplicationCore",
 			"AssetRegistry",
 			"InputCore",
 			"MaterialEditor",

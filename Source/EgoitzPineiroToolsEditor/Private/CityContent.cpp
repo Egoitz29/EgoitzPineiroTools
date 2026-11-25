@@ -1,13 +1,12 @@
-﻿#include "CityContentBuilder.h"
+#include "CityContent.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "CityParams.h"
 #include "CityPCG/CityPCGNames.h"
-#include "CityPCG/PCGCityBlocks.h"
 #include "CityPCG/PCGCityBuildings.h"
-#include "CityPCG/PCGCityCrossings.h"
 #include "CityPCG/PCGCityLots.h"
-#include "CityPCG/PCGCitySidewalkSlots.h"
-#include "CityPCG/PCGCityStreetSegments.h"
+#include "CityPCG/PCGCitySidewalkPoints.h"
+#include "CityPCG/PCGCityStreetGrid.h"
 #include "Engine/StaticMesh.h"
 #include "FileHelpers.h"
 #include "MaterialEditingLibrary.h"
@@ -16,7 +15,6 @@
 #include "Materials/MaterialExpressionVectorParameter.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "MeshDescription.h"
-#include "Metadata/PCGAttributePropertySelector.h"
 #include "Misc/PackageName.h"
 #include "PCGGraph.h"
 #include "PCGNode.h"
@@ -28,15 +26,22 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCityContent, Log, All);
 
-#define LOCTEXT_NAMESPACE "CityContentBuilder"
-
-const TCHAR* FCityContentBuilder::RootPath = TEXT("/EgoitzPineiroTools/City");
-const TCHAR* FCityContentBuilder::MaterialsPath = TEXT("/EgoitzPineiroTools/City/Materials");
-const TCHAR* FCityContentBuilder::MeshesPath = TEXT("/EgoitzPineiroTools/City/Meshes");
-const TCHAR* FCityContentBuilder::SubgraphsPath = TEXT("/EgoitzPineiroTools/City/Subgraphs");
+const TCHAR* FCityContent::RootPath = TEXT("/EgoitzPineiroTools/CityGenerator");
 
 namespace
 {
+	FString MaterialsPath() { return FString(FCityContent::RootPath) / TEXT("Materials"); }
+	FString MeshesPath() { return FString(FCityContent::RootPath) / TEXT("Meshes"); }
+	FString SubgraphPackage(const TCHAR* Name) { return FString(FCityContent::RootPath) / TEXT("Subgraphs") / Name; }
+	FString CityGraphPackage() { return FString(FCityContent::RootPath) / TEXT("PCG_City"); }
+
+	const TCHAR* const SubgraphNames[] = { TEXT("SG_Streets"), TEXT("SG_Blocks"), TEXT("SG_Buildings"), TEXT("SG_StreetLamps"), TEXT("SG_Trees") };
+
+	FString ObjectPathOf(const FString& PackageName)
+	{
+		return PackageName + TEXT(".") + FPackageName::GetShortName(PackageName);
+	}
+
 	/** Colour of every material instance: all of them are children of M_CityColor. */
 	struct FColorDefinition
 	{
@@ -56,11 +61,6 @@ namespace
 		{ TEXT("MI_TreeTrunk"), FLinearColor(0.25f, 0.15f, 0.08f) },
 		{ TEXT("MI_TreeLeaves"), FLinearColor(0.10f, 0.35f, 0.10f) },
 	};
-
-	FString ObjectPathOf(const FString& PackageName)
-	{
-		return PackageName + TEXT(".") + FPackageName::GetShortName(PackageName);
-	}
 
 	/**
 	 * Builds a mesh description from simple solids (cylinders and ellipsoids), one material slot per
@@ -191,56 +191,6 @@ namespace
 		return FString::Join(Labels, TEXT(", "));
 	}
 
-	bool IsPinWired(const UPCGPin* Pin)
-	{
-		return Pin && Pin->Edges.Num() > 0;
-	}
-
-	/**
-	 * True if the graph's Input node has these output pins and its Output node these input pins, all
-	 * of them wired. A graph left half-built by an earlier version of the builder fails this check.
-	 */
-	bool HasWiredInputOutput(UPCGGraph* Graph, const TArray<FName>& InputNodePins, const TArray<FName>& OutputNodePins)
-	{
-		for (const FName& Label : InputNodePins)
-		{
-			if (!IsPinWired(Graph->GetInputNode()->GetOutputPin(Label)))
-			{
-				return false;
-			}
-		}
-		for (const FName& Label : OutputNodePins)
-		{
-			if (!IsPinWired(Graph->GetOutputNode()->GetInputPin(Label)))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
-	/** True if, for every label, some node of the graph has a wired input pin with it (the Subgraph nodes of PCG_City). */
-	bool HasWiredNodeInputs(UPCGGraph* Graph, const TArray<FName>& Labels)
-	{
-		for (const FName& Label : Labels)
-		{
-			bool bWired = false;
-			for (UPCGNode* Node : Graph->GetNodes())
-			{
-				if (Node && IsPinWired(Node->GetInputPin(Label)))
-				{
-					bWired = true;
-					break;
-				}
-			}
-			if (!bWired)
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
 	/**
 	 * Writes nodes and edges into a PCG graph. The standard PCG nodes are found by class name and
 	 * their properties are set by reflection, from text, exactly as Copy/Paste does in Details: the
@@ -250,23 +200,29 @@ namespace
 	class FGraphWriter
 	{
 	public:
+		/** One stage of a chain of nodes: the pin the data comes in through and the one it leaves through. */
+		struct FStage
+		{
+			UPCGNode* Node;
+			FName InPin;
+			FName OutPin;
+		};
+
 		FGraphWriter(UPCGGraph* InGraph, TFunction<void(const FString&)> InOnError)
 			: Graph(InGraph)
 			, OnError(MoveTemp(InOnError))
 		{
 		}
 
+		UPCGGraph* GetGraph() const { return Graph; }
+
 		UPCGNode* Add(UClass* SettingsClass, int32 X, int32 Y)
 		{
-			if (!SettingsClass)
-			{
-				return nullptr;
-			}
 			UPCGSettings* Settings = nullptr;
-			UPCGNode* Node = Graph->AddNodeOfType(SettingsClass, Settings);
+			UPCGNode* Node = SettingsClass ? Graph->AddNodeOfType(SettingsClass, Settings) : nullptr;
 			if (!Node)
 			{
-				Fail(FString::Printf(TEXT("no se ha podido crear un nodo %s."), *SettingsClass->GetName()));
+				Fail(FString::Printf(TEXT("no se ha podido crear un nodo %s."), SettingsClass ? *SettingsClass->GetName() : TEXT("(sin clase)")));
 				return nullptr;
 			}
 			SetPosition(Node, X, Y);
@@ -279,7 +235,7 @@ namespace
 			UClass* Class = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/PCG.%s"), ClassName));
 			if (!Class || !Class->IsChildOf(UPCGSettings::StaticClass()))
 			{
-				Fail(FString::Printf(TEXT("no existe el nodo PCG %s en esta versión."), ClassName));
+				Fail(FString::Printf(TEXT("no existe el nodo PCG %s en esta versión del motor."), ClassName));
 				return nullptr;
 			}
 			return Add(Class, X, Y);
@@ -287,6 +243,10 @@ namespace
 
 		void SetPosition(UPCGNode* Node, int32 X, int32 Y)
 		{
+			if (!Node)
+			{
+				return;
+			}
 			if (FIntProperty* PositionX = FindFProperty<FIntProperty>(UPCGNode::StaticClass(), TEXT("PositionX")))
 			{
 				PositionX->SetPropertyValue_InContainer(Node, X);
@@ -356,24 +316,6 @@ namespace
 			}
 		}
 
-		/** Copies a typed struct (an attribute selector, for example) into a property of the node settings. */
-		template <typename T>
-		void SetStruct(UPCGNode* Node, const TCHAR* PropertyName, const T& Value)
-		{
-			UPCGSettings* Settings = Node ? Node->GetSettings() : nullptr;
-			if (!Settings)
-			{
-				return;
-			}
-			FStructProperty* Property = FindFProperty<FStructProperty>(Settings->GetClass(), PropertyName);
-			if (!Property || Property->Struct != T::StaticStruct())
-			{
-				Fail(FString::Printf(TEXT("%s no tiene '%s' de tipo %s. Tiene: %s"), *Settings->GetClass()->GetName(), PropertyName, *T::StaticStruct()->GetName(), *ListProperties(Settings->GetClass())));
-				return;
-			}
-			Property->CopySingleValue(Property->ContainerPtrToValuePtr<void>(Settings), &Value);
-		}
-
 		/** Lets the node rebuild its pins after its settings changed. */
 		void Refresh(UPCGNode* Node)
 		{
@@ -402,7 +344,25 @@ namespace
 			Graph->AddEdge(From, FromPin, To, ToPin);
 		}
 
-		/** Adds a Graph Parameter of type Double with its default value. */
+		/**
+		 * Connects From to each stage in turn. A stage whose node could not be created is skipped and
+		 * the chain goes on with the next one, so a missing standard node never breaks the rest.
+		 */
+		void Chain(UPCGNode* From, FName FromPin, std::initializer_list<FStage> Stages)
+		{
+			for (const FStage& Stage : Stages)
+			{
+				if (!Stage.Node)
+				{
+					continue;
+				}
+				Connect(From, FromPin, Stage.Node, Stage.InPin);
+				From = Stage.Node;
+				FromPin = Stage.OutPin;
+			}
+		}
+
+		/** Adds a Graph Parameter of type Double, or just sets its default value if it already exists. */
 		void AddParameter(FName Name, double DefaultValue)
 		{
 			const FInstancedPropertyBag* Existing = Graph->GetUserParametersStruct();
@@ -443,75 +403,13 @@ namespace
 		{
 			if (!GetNode || GetNode->GetOutputPins().IsEmpty() || !GetNode->GetOutputPins()[0])
 			{
-				Fail(FString::Printf(TEXT("el nodo de parámetro para %s no tiene salida."), *ToPin.ToString()));
+				Fail(FString::Printf(TEXT("el nodo del parámetro para %s no tiene salida."), *ToPin.ToString()));
 				return;
 			}
 			Connect(GetNode, GetNode->GetOutputPins()[0]->Properties.Label, To, ToPin);
 		}
 
-		/** Adds a Point pin to the graph's Input or Output node (Custom Pins in Details). */
-		void AddCustomPin(UPCGNode* Node, FName Label)
-		{
-			UPCGSettings* Settings = Node ? Node->GetSettings() : nullptr;
-			if (!Settings)
-			{
-				return;
-			}
-			FArrayProperty* Array = FindFProperty<FArrayProperty>(Settings->GetClass(), TEXT("CustomPins"));
-			FStructProperty* Inner = Array ? CastField<FStructProperty>(Array->Inner) : nullptr;
-			if (!Inner || Inner->Struct != FPCGPinProperties::StaticStruct())
-			{
-				Fail(FString::Printf(TEXT("%s no tiene CustomPins. Tiene: %s"), *Settings->GetClass()->GetName(), *ListProperties(Settings->GetClass())));
-				return;
-			}
-
-			const FPCGPinProperties Pin(Label, EPCGDataType::Point);
-			FScriptArrayHelper Helper(Array, Array->ContainerPtrToValuePtr<void>(Settings));
-			const int32 Index = Helper.AddValue();
-			Inner->CopySingleValue(Helper.GetRawPtr(Index), &Pin);
-
-			FPropertyChangedEvent Event(Array, EPropertyChangeType::ArrayAdd);
-			static_cast<UObject*>(Settings)->PostEditChangeProperty(Event);
-			RefreshInputOutputPins(Node);
-
-			if (!Node->GetInputPin(Label) && !Node->GetOutputPin(Label))
-			{
-				Fail(FString::Printf(TEXT("el pin '%s' no aparece en %s después de añadirlo. Entradas: %s. Salidas: %s"),
-					*Label.ToString(), *Settings->GetClass()->GetName(), *ListPins(Node->GetInputPins()), *ListPins(Node->GetOutputPins())));
-			}
-		}
-
-		/** Leaves the graph as a new one: no nodes besides Input and Output, and no custom pins on them. */
-		void Clear()
-		{
-			TArray<UPCGNode*> Nodes;
-			for (UPCGNode* Node : Graph->GetNodes())
-			{
-				Nodes.Add(Node);
-			}
-			for (UPCGNode* Node : Nodes)
-			{
-				Graph->RemoveNode(Node);
-			}
-
-			for (UPCGNode* Node : { Graph->GetInputNode(), Graph->GetOutputNode() })
-			{
-				UPCGSettings* Settings = Node ? Node->GetSettings() : nullptr;
-				FArrayProperty* Array = Settings ? FindFProperty<FArrayProperty>(Settings->GetClass(), TEXT("CustomPins")) : nullptr;
-				if (!Array)
-				{
-					continue;
-				}
-				FScriptArrayHelper Helper(Array, Array->ContainerPtrToValuePtr<void>(Settings));
-				Helper.EmptyValues();
-
-				FPropertyChangedEvent Event(Array, EPropertyChangeType::ArrayClear);
-				static_cast<UObject*>(Settings)->PostEditChangeProperty(Event);
-				RefreshInputOutputPins(Node);
-			}
-		}
-
-		/** Makes a Subgraph node run the given graph. */
+		/** Makes a Subgraph node run the given graph. Its pins become the subgraph's Graph Parameters. */
 		void SetSubgraph(UPCGNode* Node, UPCGGraph* Subgraph)
 		{
 			UPCGSettings* Settings = Node ? Node->GetSettings() : nullptr;
@@ -532,18 +430,21 @@ namespace
 			static_cast<UObject*>(Settings)->PostEditChangeProperty(Event);
 		}
 
-		UPCGGraph* GetGraph() const { return Graph; }
-
-	private:
-		/**
-		 * The Input and Output nodes come with the graph and do not always listen to their settings, so
-		 * changing their custom pins may leave the node pins as they were: rebuild them from the settings.
-		 */
-		static void RefreshInputOutputPins(UPCGNode* Node)
+		/** Leaves the graph as a new one: only its Input and Output nodes. Graph Parameters are kept. */
+		void Clear()
 		{
-			Node->SetSettingsInterface(Node->GetSettingsInterface(), /*bUpdatePins=*/true);
+			TArray<UPCGNode*> Nodes;
+			for (UPCGNode* Node : Graph->GetNodes())
+			{
+				Nodes.Add(Node);
+			}
+			for (UPCGNode* Node : Nodes)
+			{
+				Graph->RemoveNode(Node);
+			}
 		}
 
+	private:
 		void Fail(const FString& Message)
 		{
 			OnError(FString::Printf(TEXT("%s: %s"), *Graph->GetName(), *Message));
@@ -569,39 +470,48 @@ namespace
 	}
 }
 
-FText FCityContentBuilder::FReport::ToText() const
+FString FCityContent::CityGraphObjectPath()
 {
-	FString Text = FString::Printf(TEXT("Creados: %d · Rehechos: %d · Ya existían: %d · Errores: %d"), Created.Num(), Rebuilt.Num(), Skipped.Num(), Errors.Num());
+	return ObjectPathOf(CityGraphPackage());
+}
+
+FString FCityContent::FReport::ToString() const
+{
+	if (IsEmpty())
+	{
+		return TEXT("El contenido del plugin está al día.");
+	}
+
+	FString Text = FString::Printf(TEXT("Contenido: %d creados, %d grafos rehechos, %d errores."), Created.Num(), Rebuilt.Num(), Errors.Num());
 	for (const FString& Message : Errors)
 	{
 		Text += TEXT("\n- ") + Message;
 	}
-	if (!Errors.IsEmpty())
-	{
-		Text += TEXT("\nUn grafo que queda incompleto se rehace la próxima vez que pulses Crear contenido. Un material o una malla con errores, bórralo en el Content Browser para rehacerlo.");
-	}
-	return FText::FromString(Text);
+	return Text;
 }
 
-FCityContentBuilder::FReport FCityContentBuilder::Build()
+FCityContent::FReport FCityContent::Ensure(bool bRebuildGraphs)
 {
 	FReport Report;
-	FCityContentBuilder Builder(Report);
-	Builder.BuildMaterials();
-	Builder.BuildMeshes();
-	Builder.BuildGraphs();
-	Builder.SaveAll();
+	FCityContent Content(Report);
+	Content.BuildMaterials();
+	Content.BuildMeshes();
+	if (bRebuildGraphs || !Content.AreGraphsUpToDate())
+	{
+		Content.BuildGraphs();
+	}
+	Content.SaveAll();
 	return Report;
 }
 
-void FCityContentBuilder::Error(const FString& Message)
+void FCityContent::Error(const FString& Message)
 {
 	UE_LOG(LogCityContent, Warning, TEXT("%s"), *Message);
 	Report.Errors.Add(Message);
 }
 
 template <typename T>
-T* FCityContentBuilder::FindExisting(const FString& PackageName) const
+T* FCityContent::FindExisting(const FString& PackageName) const
 {
 	const FString ObjectPath = ObjectPathOf(PackageName);
 	if (T* InMemory = FindObject<T>(nullptr, *ObjectPath))
@@ -615,7 +525,7 @@ T* FCityContentBuilder::FindExisting(const FString& PackageName) const
 }
 
 template <typename T>
-T* FCityContentBuilder::CreateAsset(const FString& PackageName)
+T* FCityContent::CreateAsset(const FString& PackageName)
 {
 	UPackage* Package = CreatePackage(*PackageName);
 	Package->FullyLoad();
@@ -624,21 +534,17 @@ T* FCityContentBuilder::CreateAsset(const FString& PackageName)
 	FAssetRegistryModule::AssetCreated(Asset);
 	Package->MarkPackageDirty();
 
-	PackagesToSave.Add(Package);
+	PackagesToSave.AddUnique(Package);
 	Report.Created.Add(PackageName);
 	return Asset;
 }
 
-void FCityContentBuilder::BuildMaterials()
+void FCityContent::BuildMaterials()
 {
 	// Base material: one colour parameter and one roughness parameter, nothing else
-	const FString BasePackage = FString(MaterialsPath) / TEXT("M_CityColor");
+	const FString BasePackage = MaterialsPath() / TEXT("M_CityColor");
 	UMaterial* BaseMaterial = FindExisting<UMaterial>(BasePackage);
-	if (BaseMaterial)
-	{
-		Report.Skipped.Add(BasePackage);
-	}
-	else
+	if (!BaseMaterial)
 	{
 		BaseMaterial = CreateAsset<UMaterial>(BasePackage);
 
@@ -660,10 +566,9 @@ void FCityContentBuilder::BuildMaterials()
 	// One instance per colour
 	for (const FColorDefinition& Definition : MaterialColors)
 	{
-		const FString PackageName = FString(MaterialsPath) / Definition.Name;
+		const FString PackageName = MaterialsPath() / Definition.Name;
 		if (FindExisting<UMaterialInstanceConstant>(PackageName))
 		{
-			Report.Skipped.Add(PackageName);
 			continue;
 		}
 
@@ -674,7 +579,7 @@ void FCityContentBuilder::BuildMaterials()
 	}
 }
 
-void FCityContentBuilder::BuildMeshes()
+void FCityContent::BuildMeshes()
 {
 	struct FSlot
 	{
@@ -684,10 +589,9 @@ void FCityContentBuilder::BuildMeshes()
 
 	auto BuildMesh = [this](const TCHAR* AssetName, TArrayView<const FSlot> Slots, TFunctionRef<void(FSimpleMeshBuilder&, TArrayView<const FPolygonGroupID>)> AddSolids)
 	{
-		const FString PackageName = FString(MeshesPath) / AssetName;
+		const FString PackageName = MeshesPath() / AssetName;
 		if (FindExisting<UStaticMesh>(PackageName))
 		{
-			Report.Skipped.Add(PackageName);
 			return;
 		}
 
@@ -702,7 +606,7 @@ void FCityContentBuilder::BuildMeshes()
 		UStaticMesh* Mesh = CreateAsset<UStaticMesh>(PackageName);
 		for (const FSlot& Slot : Slots)
 		{
-			UMaterialInterface* Material = FindExisting<UMaterialInterface>(FString(MaterialsPath) / Slot.Material);
+			UMaterialInterface* Material = FindExisting<UMaterialInterface>(MaterialsPath() / Slot.Material);
 			if (!Material)
 			{
 				Error(FString::Printf(TEXT("%s: falta el material %s."), AssetName, Slot.Material));
@@ -731,64 +635,68 @@ void FCityContentBuilder::BuildMeshes()
 		Mesh.AddEllipsoid(Groups[1], FVector(0.0, 0.0, 460.0), FVector(25.0, 25.0, 18.0), 6, 12);
 	});
 
-	// Tree: a 2 m trunk and a round crown, about 4.7 m tall
+	// Tree: a 2 m trunk and a round crown about 1.1 m in radius, 4.4 m tall in total
 	const FSlot TreeSlots[] = { { TEXT("Trunk"), TEXT("MI_TreeTrunk") }, { TEXT("Leaves"), TEXT("MI_TreeLeaves") } };
 	BuildMesh(TEXT("SM_Tree"), TreeSlots, [](FSimpleMeshBuilder& Mesh, TArrayView<const FPolygonGroupID> Groups)
 	{
-		Mesh.AddCylinder(Groups[0], FVector::ZeroVector, 12.0, 210.0, 8);
-		Mesh.AddEllipsoid(Groups[1], FVector(0.0, 0.0, 330.0), FVector(130.0, 130.0, 140.0), 8, 12);
+		Mesh.AddCylinder(Groups[0], FVector::ZeroVector, 10.0, 200.0, 8);
+		Mesh.AddEllipsoid(Groups[1], FVector(0.0, 0.0, 310.0), FVector(110.0, 110.0, 130.0), 8, 12);
 	});
 }
 
-void FCityContentBuilder::BuildGraphs()
+bool FCityContent::AreGraphsUpToDate() const
+{
+	for (const TCHAR* Name : SubgraphNames)
+	{
+		if (!FindExisting<UPCGGraph>(SubgraphPackage(Name)))
+		{
+			return false;
+		}
+	}
+
+	UPCGGraph* City = FindExisting<UPCGGraph>(CityGraphPackage());
+	const FInstancedPropertyBag* Parameters = City ? City->GetUserParametersStruct() : nullptr;
+	if (!Parameters)
+	{
+		return false;
+	}
+	const TValueOrError<double, EPropertyBagResult> Version = Parameters->GetValueDouble(CityParamNames::GraphVersion);
+	return Version.HasValue() && FMath::IsNearlyEqual(Version.GetValue(), static_cast<double>(GraphVersion));
+}
+
+void FCityContent::BuildGraphs()
 {
 	using namespace CityPCGNames;
+	namespace Param = CityParamNames;
 
+	const int32 ErrorsBefore = Report.Errors.Num();
 	const FName In = PCGPinConstants::DefaultInputLabel;
 	const FName Out = PCGPinConstants::DefaultOutputLabel;
-	const FName InsideFilter(TEXT("InsideFilter"));
 	const FString Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	const TFunction<void(const FString&)> OnError = [this](const FString& Message) { Error(Message); };
 
-	auto MaterialPath = [](const TCHAR* Name) { return ObjectPathOf(FString(FCityContentBuilder::MaterialsPath) / Name); };
-	auto MeshPath = [](const TCHAR* Name) { return ObjectPathOf(FString(FCityContentBuilder::MeshesPath) / Name); };
+	auto MaterialPath = [](const TCHAR* Name) { return ObjectPathOf(MaterialsPath() / Name); };
+	auto MeshPath = [](const TCHAR* Name) { return ObjectPathOf(MeshesPath() / Name); };
 
-	// True if the graph has to be filled: it is new, or it existed but is incomplete (an earlier run
-	// could not wire it), and then it is emptied first. A complete graph is kept as it is, with any
-	// change made to it by hand.
-	auto StartGraph = [this, &OnError](const FString& PackageName, UPCGGraph*& OutGraph, TFunctionRef<bool(UPCGGraph*)> IsComplete)
+	// A graph ready to be filled: a new asset, or the existing one emptied (same asset, same references)
+	auto StartGraph = [this, &OnError](const FString& PackageName)
 	{
-		OutGraph = FindExisting<UPCGGraph>(PackageName);
-		if (!OutGraph)
+		UPCGGraph* Graph = FindExisting<UPCGGraph>(PackageName);
+		if (!Graph)
 		{
-			OutGraph = CreateAsset<UPCGGraph>(PackageName);
-			return true;
+			return CreateAsset<UPCGGraph>(PackageName);
 		}
-		if (IsComplete(OutGraph))
-		{
-			Report.Skipped.Add(PackageName);
-			return false;
-		}
-
-		FGraphWriter(OutGraph, OnError).Clear();
-		OutGraph->MarkPackageDirty();
-		PackagesToSave.AddUnique(OutGraph->GetPackage());
+		FGraphWriter(Graph, OnError).Clear();
+		Graph->MarkPackageDirty();
+		PackagesToSave.AddUnique(Graph->GetPackage());
 		Report.Rebuilt.Add(PackageName);
-		return true;
+		return Graph;
 	};
 
-	// Attribute Filter that keeps the points whose attribute equals a constant
-	auto AddEqualsFilter = [](FGraphWriter& Writer, int32 X, int32 Y, FName Attribute, const TCHAR* ConstantText)
+	auto PlaceInputOutput = [](FGraphWriter& Writer, int32 InputX, int32 OutputX)
 	{
-		UPCGNode* Filter = Writer.AddStandard(TEXT("PCGAttributeFilteringSettings"), X, Y);
-		FPCGAttributePropertyInputSelector Target;
-		Target.SetAttributeName(Attribute);
-		Writer.SetStruct(Filter, TEXT("TargetAttribute"), Target);
-		Writer.Set(Filter, TEXT("Operator"), TEXT("Equal"));
-		Writer.Set(Filter, TEXT("bUseConstantThreshold"), TEXT("True"));
-		Writer.Set(Filter, TEXT("AttributeTypes"), ConstantText);
-		Writer.Refresh(Filter);
-		return Filter;
+		Writer.SetPosition(Writer.GetGraph()->GetInputNode(), InputX, 0);
+		Writer.SetPosition(Writer.GetGraph()->GetOutputNode(), OutputX, 0);
 	};
 
 	auto AddSpawner = [](FGraphWriter& Writer, int32 X, int32 Y, const FString& EntriesText)
@@ -799,209 +707,177 @@ void FCityContentBuilder::BuildGraphs()
 		return Spawner;
 	};
 
-	auto PlaceInputOutput = [](FGraphWriter& Writer, int32 InputX, int32 OutputX)
+	// Every subgraph starts the same way: CitySize and BlockSize into a City Street Grid node
+	auto AddStreetGrid = [](FGraphWriter& Writer)
 	{
-		Writer.SetPosition(Writer.GetGraph()->GetInputNode(), InputX, 0);
-		Writer.SetPosition(Writer.GetGraph()->GetOutputNode(), OutputX, 0);
+		Writer.AddParameter(Param::CitySize, 400.0);
+		Writer.AddParameter(Param::BlockSize, 60.0);
+		UPCGNode* GetCitySize = Writer.AddGetParameter(Param::CitySize, -1100, -100);
+		UPCGNode* GetBlockSize = Writer.AddGetParameter(Param::BlockSize, -1100, 100);
+		UPCGNode* Grid = Writer.Add(UPCGCityStreetGridSettings::StaticClass(), -750, 0);
+		Writer.ConnectParameter(GetCitySize, Grid, Param::CitySize);
+		Writer.ConnectParameter(GetBlockSize, Grid, Param::BlockSize);
+		return Grid;
 	};
 
-	// --- SG_Streets: crossings and street segments -------------------------------------------
-	UPCGGraph* Streets = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Streets"), Streets,
-		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, {}, { CrossingsPin }); }))
+	auto AddSidewalkPoints = [](FGraphWriter& Writer, double Spacing, double Phase, double CurbOffset, double CornerClearance)
+	{
+		UPCGNode* Node = Writer.Add(UPCGCitySidewalkPointsSettings::StaticClass(), -400, 0);
+		if (UPCGCitySidewalkPointsSettings* Settings = Node ? Cast<UPCGCitySidewalkPointsSettings>(Node->GetSettings()) : nullptr)
+		{
+			Settings->Spacing = Spacing;
+			Settings->Phase = Phase;
+			Settings->CurbOffset = CurbOffset;
+			Settings->CornerClearance = CornerClearance;
+		}
+		return Node;
+	};
+
+	// --- SG_Streets: the road slabs ---------------------------------------------------------------
+	UPCGGraph* Streets = StartGraph(SubgraphPackage(TEXT("SG_Streets")));
 	{
 		FGraphWriter Writer(Streets, OnError);
-		Writer.AddParameter(TEXT("CitySize"), 400.0);
-		Writer.AddParameter(TEXT("BlockSize"), 60.0);
-		PlaceInputOutput(Writer, -1000, 900);
-
-		UPCGNode* GetCitySize = Writer.AddGetParameter(TEXT("CitySize"), -700, -100);
-		UPCGNode* GetBlockSize = Writer.AddGetParameter(TEXT("BlockSize"), -700, 100);
-		UPCGNode* Crossings = Writer.Add(UPCGCityCrossingsSettings::StaticClass(), -350, 0);
-		UPCGNode* Segments = Writer.Add(UPCGCityStreetSegmentsSettings::StaticClass(), 0, 200);
-		UPCGNode* Merge = Writer.AddStandard(TEXT("PCGMergeSettings"), 300, 0);
-		UPCGNode* Spawner = AddSpawner(Writer, 600, 0, MeshEntriesText(Cube, { MaterialPath(TEXT("MI_Road")) }));
-		UPCGNode* Output = Streets->GetOutputNode();
-		Writer.AddCustomPin(Output, CrossingsPin);
-
-		Writer.ConnectParameter(GetCitySize, Crossings, TEXT("CitySize"));
-		Writer.ConnectParameter(GetBlockSize, Crossings, TEXT("BlockSize"));
-		Writer.Connect(Crossings, CrossingsPin, Segments, CrossingsPin);
-		Writer.Connect(Crossings, CrossingsPin, Merge, In);
-		Writer.Connect(Segments, SegmentsPin, Merge, In);
-		Writer.Connect(Merge, Out, Spawner, In);
-		Writer.Connect(Crossings, CrossingsPin, Output, CrossingsPin);
+		PlaceInputOutput(Writer, -1400, 400);
+		UPCGNode* Grid = AddStreetGrid(Writer);
+		UPCGNode* Spawner = AddSpawner(Writer, -350, 0, MeshEntriesText(Cube, { MaterialPath(TEXT("MI_Road")) }));
+		Writer.Chain(Grid, RoadsPin, { { Spawner, In, Out } });
 	}
 
-	// --- SG_Blocks: blocks (sidewalk level) and the sidewalk slots for street furniture -------
-	const FName SidewalkSlotsPin(TEXT("SidewalkSlots"));
-	UPCGGraph* Blocks = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Blocks"), Blocks,
-		[&SidewalkSlotsPin](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { CrossingsPin }, { BlocksPin, SidewalkSlotsPin }); }))
+	// --- SG_Blocks: the blocks, drawn as the sidewalk slab -----------------------------------------
+	UPCGGraph* Blocks = StartGraph(SubgraphPackage(TEXT("SG_Blocks")));
 	{
 		FGraphWriter Writer(Blocks, OnError);
-		PlaceInputOutput(Writer, -700, 500);
-		UPCGNode* Input = Blocks->GetInputNode();
-		UPCGNode* Output = Blocks->GetOutputNode();
-		Writer.AddCustomPin(Input, CrossingsPin);
-		Writer.AddCustomPin(Output, BlocksPin);
-		Writer.AddCustomPin(Output, SidewalkSlotsPin);
-
-		UPCGNode* CityBlocks = Writer.Add(UPCGCityBlocksSettings::StaticClass(), -350, 0);
-		UPCGNode* Spawner = AddSpawner(Writer, 50, -200, MeshEntriesText(Cube, { MaterialPath(TEXT("MI_Sidewalk")) }));
-		UPCGNode* Slots = Writer.Add(UPCGCitySidewalkSlotsSettings::StaticClass(), 50, 200);
-
-		Writer.Connect(Input, CrossingsPin, CityBlocks, CrossingsPin);
-		Writer.Connect(CityBlocks, BlocksPin, Spawner, In);
-		Writer.Connect(CityBlocks, BlocksPin, Slots, BlocksPin);
-		Writer.Connect(Input, CrossingsPin, Slots, CrossingsPin);
-		Writer.Connect(CityBlocks, BlocksPin, Output, BlocksPin);
-		Writer.Connect(Slots, SlotsPin, Output, SidewalkSlotsPin);
+		PlaceInputOutput(Writer, -1400, 400);
+		UPCGNode* Grid = AddStreetGrid(Writer);
+		UPCGNode* Spawner = AddSpawner(Writer, -350, 0, MeshEntriesText(Cube, { MaterialPath(TEXT("MI_Sidewalk")) }));
+		Writer.Chain(Grid, BlocksPin, { { Spawner, In, Out } });
 	}
 
-	// --- SG_Buildings: lots, density and buildings ----------------------------------------------
-	UPCGGraph* Buildings = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Buildings"), Buildings,
-		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { BlocksPin }, { BuildingsPin }); }))
+	// --- SG_Buildings: lots -> density -> buildings -> rotation -> pruning -> meshes ---------------
+	UPCGGraph* Buildings = StartGraph(SubgraphPackage(TEXT("SG_Buildings")));
 	{
 		FGraphWriter Writer(Buildings, OnError);
-		Writer.AddParameter(TEXT("BuildingDensity"), 0.6);
-		Writer.AddParameter(TEXT("BuildingHeight"), 30.0);
-		Writer.AddParameter(TEXT("BuildingVariation"), 0.5);
-		PlaceInputOutput(Writer, -1300, 1700);
-		UPCGNode* Input = Buildings->GetInputNode();
-		UPCGNode* Output = Buildings->GetOutputNode();
-		Writer.AddCustomPin(Input, BlocksPin);
-		Writer.AddCustomPin(Output, BuildingsPin);
+		PlaceInputOutput(Writer, -1400, 1800);
+		UPCGNode* Grid = AddStreetGrid(Writer);
+		Writer.AddParameter(Param::BuildingDensity, 0.6);
+		Writer.AddParameter(Param::BuildingHeight, 30.0);
+		Writer.AddParameter(Param::BuildingVariation, 0.5);
 
-		UPCGNode* Lots = Writer.Add(UPCGCityLotsSettings::StaticClass(), -1000, 0);
-		UPCGNode* FrontageFilter = AddEqualsFilter(Writer, -700, 0, CityPCGNames::Frontage, TEXT("(Type=Boolean,BoolValue=True)"));
+		UPCGNode* GetDensity = Writer.AddGetParameter(Param::BuildingDensity, -750, 300);
+		UPCGNode* Lots = Writer.Add(UPCGCityLotsSettings::StaticClass(), -400, 0);
 
-		UPCGNode* Noise = Writer.AddStandard(TEXT("PCGAttributeNoiseSettings"), -400, 0);
-		FPCGAttributePropertyInputSelector DensitySource;
-		DensitySource.SetPointProperty(EPCGPointProperties::Density);
-		Writer.SetStruct(Noise, TEXT("InputSource"), DensitySource);
-		Writer.Set(Noise, TEXT("Mode"), TEXT("Set"));
-		Writer.Set(Noise, TEXT("NoiseMin"), TEXT("0.0"));
-		Writer.Set(Noise, TEXT("NoiseMax"), TEXT("1.0"));
-		Writer.Refresh(Noise);
-
-		UPCGNode* GetDensity = Writer.AddGetParameter(TEXT("BuildingDensity"), -400, 250);
-		UPCGNode* DensityFilter = Writer.AddStandard(TEXT("PCGDensityFilterSettings"), -100, 0);
-		Writer.Set(DensityFilter, TEXT("LowerBound"), TEXT("0.0"));
+		UPCGNode* DensityFilter = Writer.AddStandard(TEXT("PCGDensityFilterSettings"), -50, 0);
+		Writer.Set(DensityFilter, TEXT("LowerBound"), TEXT("0.5"));
+		Writer.Set(DensityFilter, TEXT("UpperBound"), TEXT("1.0"));
 		Writer.Refresh(DensityFilter);
 
-		UPCGNode* GetHeight = Writer.AddGetParameter(TEXT("BuildingHeight"), -100, 250);
-		UPCGNode* GetVariation = Writer.AddGetParameter(TEXT("BuildingVariation"), -100, 400);
-		UPCGNode* CityBuildings = Writer.Add(UPCGCityBuildingsSettings::StaticClass(), 250, 0);
+		UPCGNode* GetHeight = Writer.AddGetParameter(Param::BuildingHeight, -50, 250);
+		UPCGNode* GetVariation = Writer.AddGetParameter(Param::BuildingVariation, -50, 400);
+		UPCGNode* CityBuildings = Writer.Add(UPCGCityBuildingsSettings::StaticClass(), 300, 0);
 
-		UPCGNode* Jitter = Writer.AddStandard(TEXT("PCGTransformPointsSettings"), 600, 0);
-		Writer.Set(Jitter, TEXT("OffsetMin"), TEXT("(X=-50.0,Y=-50.0,Z=0.0)"));
-		Writer.Set(Jitter, TEXT("OffsetMax"), TEXT("(X=50.0,Y=50.0,Z=0.0)"));
-		Writer.Refresh(Jitter);
+		// A few degrees of yaw per building, from the seed
+		UPCGNode* Rotation = Writer.AddStandard(TEXT("PCGTransformPointsSettings"), 650, 0);
+		Writer.Set(Rotation, TEXT("RotationMin"), TEXT("(Pitch=0.0,Yaw=-4.0,Roll=0.0)"));
+		Writer.Set(Rotation, TEXT("RotationMax"), TEXT("(Pitch=0.0,Yaw=4.0,Roll=0.0)"));
+		Writer.Refresh(Rotation);
 
-		UPCGNode* Pruning = Writer.AddStandard(TEXT("PCGSelfPruningSettings"), 950, 0);
-		UPCGNode* Spawner = AddSpawner(Writer, 1300, 0, MeshEntriesText(Cube,
+		UPCGNode* Pruning = Writer.AddStandard(TEXT("PCGSelfPruningSettings"), 1000, 0);
+		UPCGNode* Spawner = AddSpawner(Writer, 1350, 0, MeshEntriesText(Cube,
 			{ MaterialPath(TEXT("MI_Building_A")), MaterialPath(TEXT("MI_Building_B")), MaterialPath(TEXT("MI_Building_C")) }));
 
-		Writer.Connect(Input, BlocksPin, Lots, BlocksPin);
-		Writer.Connect(Lots, LotsPin, FrontageFilter, In);
-		Writer.Connect(FrontageFilter, InsideFilter, Noise, In);
-		Writer.Connect(Noise, Out, DensityFilter, In);
-		Writer.ConnectParameter(GetDensity, DensityFilter, TEXT("UpperBound"));
-		Writer.Connect(DensityFilter, Out, CityBuildings, LotsPin);
-		Writer.ConnectParameter(GetHeight, CityBuildings, TEXT("BuildingHeight"));
-		Writer.ConnectParameter(GetVariation, CityBuildings, TEXT("BuildingVariation"));
-		Writer.Connect(CityBuildings, BuildingsPin, Jitter, In);
-		Writer.Connect(Jitter, Out, Pruning, In);
-		Writer.Connect(Pruning, Out, Spawner, In);
-		Writer.Connect(Pruning, Out, Output, BuildingsPin);
+		Writer.Connect(Grid, BlocksPin, Lots, BlocksPin);
+		Writer.ConnectParameter(GetDensity, Lots, Param::BuildingDensity);
+		Writer.ConnectParameter(GetHeight, CityBuildings, Param::BuildingHeight);
+		Writer.ConnectParameter(GetVariation, CityBuildings, Param::BuildingVariation);
+		Writer.Chain(Lots, LotsPin, {
+			{ DensityFilter, In, Out },
+			{ CityBuildings, LotsPin, BuildingsPin },
+			{ Rotation, In, Out },
+			{ Pruning, In, Out },
+			{ Spawner, In, Out } });
 	}
 
-	// --- SG_StreetLamps and SG_Trees: one subgraph per kind of street furniture -----------------
-	UPCGGraph* StreetLamps = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_StreetLamps"), StreetLamps,
-		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { SlotsPin }, {}); }))
+	// --- SG_StreetLamps: near the kerb, every 24 m ---------------------------------------------------
+	UPCGGraph* StreetLamps = StartGraph(SubgraphPackage(TEXT("SG_StreetLamps")));
 	{
 		FGraphWriter Writer(StreetLamps, OnError);
-		PlaceInputOutput(Writer, -700, 500);
-		UPCGNode* Input = StreetLamps->GetInputNode();
-		Writer.AddCustomPin(Input, SlotsPin);
-
-		UPCGNode* Filter = AddEqualsFilter(Writer, -350, 0, PropType, TEXT("(Type=Integer64,IntValue=0)"));
-		UPCGNode* Spawner = AddSpawner(Writer, 50, 0, MeshEntriesText(MeshPath(TEXT("SM_StreetLamp")), {}));
-
-		Writer.Connect(Input, SlotsPin, Filter, In);
-		Writer.Connect(Filter, InsideFilter, Spawner, In);
+		PlaceInputOutput(Writer, -1400, 400);
+		UPCGNode* Grid = AddStreetGrid(Writer);
+		UPCGNode* Points = AddSidewalkPoints(Writer, 24.0, 0.0, 0.6, 6.0);
+		UPCGNode* Spawner = AddSpawner(Writer, 0, 0, MeshEntriesText(MeshPath(TEXT("SM_StreetLamp")), {}));
+		Writer.Connect(Grid, BlocksPin, Points, BlocksPin);
+		Writer.Chain(Points, PointsPin, { { Spawner, In, Out } });
 	}
 
-	UPCGGraph* Trees = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Trees"), Trees,
-		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { SlotsPin }, {}); }))
+	// --- SG_Trees: halfway between the lamps, with random yaw and size ------------------------------
+	UPCGGraph* Trees = StartGraph(SubgraphPackage(TEXT("SG_Trees")));
 	{
 		FGraphWriter Writer(Trees, OnError);
-		PlaceInputOutput(Writer, -700, 800);
-		UPCGNode* Input = Trees->GetInputNode();
-		Writer.AddCustomPin(Input, SlotsPin);
+		PlaceInputOutput(Writer, -1400, 750);
+		UPCGNode* Grid = AddStreetGrid(Writer);
+		UPCGNode* Points = AddSidewalkPoints(Writer, 24.0, 0.5, 1.4, 6.0);
 
-		UPCGNode* Filter = AddEqualsFilter(Writer, -350, 0, PropType, TEXT("(Type=Integer64,IntValue=1)"));
 		UPCGNode* Variation = Writer.AddStandard(TEXT("PCGTransformPointsSettings"), 0, 0);
 		Writer.Set(Variation, TEXT("RotationMax"), TEXT("(Pitch=0.0,Yaw=360.0,Roll=0.0)"));
 		Writer.Set(Variation, TEXT("ScaleMin"), TEXT("(X=0.8,Y=0.8,Z=0.8)"));
-		Writer.Set(Variation, TEXT("ScaleMax"), TEXT("(X=1.3,Y=1.3,Z=1.3)"));
+		Writer.Set(Variation, TEXT("ScaleMax"), TEXT("(X=1.25,Y=1.25,Z=1.25)"));
 		Writer.Set(Variation, TEXT("bUniformScale"), TEXT("True"));
 		Writer.Refresh(Variation);
-		UPCGNode* Spawner = AddSpawner(Writer, 400, 0, MeshEntriesText(MeshPath(TEXT("SM_Tree")), {}));
 
-		Writer.Connect(Input, SlotsPin, Filter, In);
-		Writer.Connect(Filter, InsideFilter, Variation, In);
-		Writer.Connect(Variation, Out, Spawner, In);
+		UPCGNode* Spawner = AddSpawner(Writer, 350, 0, MeshEntriesText(MeshPath(TEXT("SM_Tree")), {}));
+		Writer.Connect(Grid, BlocksPin, Points, BlocksPin);
+		Writer.Chain(Points, PointsPin, { { Variation, In, Out }, { Spawner, In, Out } });
 	}
 
-	// --- PCG_City: only wires the systems and passes the parameters down ------------------------
-	UPCGGraph* City = nullptr;
-	if (StartGraph(FString(RootPath) / TEXT("PCG_City"), City,
-		[](UPCGGraph* Graph) { return HasWiredNodeInputs(Graph, { CrossingsPin, BlocksPin, SlotsPin }); }))
+	// --- PCG_City: only runs the subgraphs and passes the parameters down -------------------------
+	UPCGGraph* City = StartGraph(CityGraphPackage());
 	{
 		FGraphWriter Writer(City, OnError);
-		Writer.AddParameter(TEXT("CitySize"), 400.0);
-		Writer.AddParameter(TEXT("BlockSize"), 60.0);
-		Writer.AddParameter(TEXT("BuildingDensity"), 0.6);
-		Writer.AddParameter(TEXT("BuildingHeight"), 30.0);
-		Writer.AddParameter(TEXT("BuildingVariation"), 0.5);
-		PlaceInputOutput(Writer, -1100, 1100);
+		PlaceInputOutput(Writer, -1100, 800);
+		Writer.AddParameter(Param::CitySize, 400.0);
+		Writer.AddParameter(Param::BlockSize, 60.0);
+		Writer.AddParameter(Param::BuildingDensity, 0.6);
+		Writer.AddParameter(Param::BuildingHeight, 30.0);
+		Writer.AddParameter(Param::BuildingVariation, 0.5);
+		Writer.AddParameter(Param::GraphVersion, 0.0); // the real version is written at the end, only if all went well
 
-		auto AddSubgraph = [&Writer](UPCGGraph* Subgraph, int32 X, int32 Y)
+		UPCGNode* GetCitySize = Writer.AddGetParameter(Param::CitySize, -800, -200);
+		UPCGNode* GetBlockSize = Writer.AddGetParameter(Param::BlockSize, -800, -50);
+		UPCGNode* GetDensity = Writer.AddGetParameter(Param::BuildingDensity, -800, 100);
+		UPCGNode* GetHeight = Writer.AddGetParameter(Param::BuildingHeight, -800, 250);
+		UPCGNode* GetVariation = Writer.AddGetParameter(Param::BuildingVariation, -800, 400);
+
+		struct FSystem
 		{
-			UPCGNode* Node = Writer.AddStandard(TEXT("PCGSubgraphSettings"), X, Y);
-			Writer.SetSubgraph(Node, Subgraph);
-			return Node;
+			UPCGGraph* Graph;
+			bool bBuildings;
 		};
+		const FSystem Systems[] = { { Streets, false }, { Blocks, false }, { Buildings, true }, { StreetLamps, false }, { Trees, false } };
 
-		UPCGNode* GetCitySize = Writer.AddGetParameter(TEXT("CitySize"), -800, -100);
-		UPCGNode* GetBlockSize = Writer.AddGetParameter(TEXT("BlockSize"), -800, 50);
-		UPCGNode* StreetsNode = AddSubgraph(Streets, -450, 0);
-		UPCGNode* BlocksNode = AddSubgraph(Blocks, -50, 0);
-		UPCGNode* GetDensity = Writer.AddGetParameter(TEXT("BuildingDensity"), 0, -350);
-		UPCGNode* GetHeight = Writer.AddGetParameter(TEXT("BuildingHeight"), 0, -250);
-		UPCGNode* GetVariation = Writer.AddGetParameter(TEXT("BuildingVariation"), 0, -150);
-		UPCGNode* BuildingsNode = AddSubgraph(Buildings, 400, -200);
-		UPCGNode* LampsNode = AddSubgraph(StreetLamps, 400, 100);
-		UPCGNode* TreesNode = AddSubgraph(Trees, 400, 300);
+		int32 Y = -300;
+		for (const FSystem& System : Systems)
+		{
+			UPCGNode* Node = Writer.AddStandard(TEXT("PCGSubgraphSettings"), 300, Y);
+			Y += 200;
+			Writer.SetSubgraph(Node, System.Graph);
+			Writer.ConnectParameter(GetCitySize, Node, Param::CitySize);
+			Writer.ConnectParameter(GetBlockSize, Node, Param::BlockSize);
+			if (System.bBuildings)
+			{
+				Writer.ConnectParameter(GetDensity, Node, Param::BuildingDensity);
+				Writer.ConnectParameter(GetHeight, Node, Param::BuildingHeight);
+				Writer.ConnectParameter(GetVariation, Node, Param::BuildingVariation);
+			}
+		}
 
-		Writer.ConnectParameter(GetCitySize, StreetsNode, TEXT("CitySize"));
-		Writer.ConnectParameter(GetBlockSize, StreetsNode, TEXT("BlockSize"));
-		Writer.Connect(StreetsNode, CrossingsPin, BlocksNode, CrossingsPin);
-		Writer.Connect(BlocksNode, BlocksPin, BuildingsNode, BlocksPin);
-		Writer.ConnectParameter(GetDensity, BuildingsNode, TEXT("BuildingDensity"));
-		Writer.ConnectParameter(GetHeight, BuildingsNode, TEXT("BuildingHeight"));
-		Writer.ConnectParameter(GetVariation, BuildingsNode, TEXT("BuildingVariation"));
-		Writer.Connect(BlocksNode, SidewalkSlotsPin, LampsNode, SlotsPin);
-		Writer.Connect(BlocksNode, SidewalkSlotsPin, TreesNode, SlotsPin);
+		if (Report.Errors.Num() == ErrorsBefore)
+		{
+			Writer.AddParameter(Param::GraphVersion, static_cast<double>(GraphVersion));
+		}
 	}
 }
 
-void FCityContentBuilder::SaveAll()
+void FCityContent::SaveAll()
 {
 	if (PackagesToSave.IsEmpty())
 	{
@@ -1009,8 +885,6 @@ void FCityContentBuilder::SaveAll()
 	}
 	if (!UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, /*bOnlyDirty=*/false))
 	{
-		Error(TEXT("No se han podido guardar todos los assets nuevos. Usa File > Save All."));
+		Error(TEXT("No se han podido guardar todos los assets. Usa File > Save All."));
 	}
 }
-
-#undef LOCTEXT_NAMESPACE

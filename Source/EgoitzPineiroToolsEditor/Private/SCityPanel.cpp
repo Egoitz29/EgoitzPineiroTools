@@ -1,21 +1,22 @@
-﻿#include "SCityGeneratorPanel.h"
+#include "SCityPanel.h"
 
-#include "CityContentBuilder.h"
-#include "CityGeneratorTool.h"
-#include "HAL/PlatformTime.h"
+#include "CityGrid.h"
+#include "HAL/PlatformApplicationMisc.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Input/SSpinBox.h"
+#include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
-#define LOCTEXT_NAMESPACE "SCityGeneratorPanel"
+#define LOCTEXT_NAMESPACE "SCityPanel"
 
 template <typename T>
-TSharedRef<SWidget> SCityGeneratorPanel::MakeParameterRow(const FText& Label, const FText& Tooltip, T& Value, T MinValue, T MaxValue, T Delta)
+TSharedRef<SWidget> SCityPanel::MakeParameterRow(const FText& Label, const FText& Tooltip, T& Value, T MinValue, T MaxValue, T Delta)
 {
 	return SNew(SHorizontalBox)
 		.ToolTipText(Tooltip)
@@ -38,11 +39,11 @@ TSharedRef<SWidget> SCityGeneratorPanel::MakeParameterRow(const FText& Label, co
 		];
 }
 
-void SCityGeneratorPanel::Construct(const FArguments& InArgs)
+void SCityPanel::Construct(const FArguments& InArgs)
 {
-	Tool = InArgs._Tool;
-	check(Tool.IsValid());
-	FCityGenerationParams& Params = Tool->Params;
+	Generator = InArgs._Generator;
+	check(Generator.IsValid());
+	FCityParams& Params = Generator->Params;
 
 	ChildSlot
 	[
@@ -61,34 +62,11 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("Intro", "Ajusta los parámetros y pulsa Generar. Misma seed y mismos parámetros, misma ciudad."))
+				.Text(LOCTEXT("Intro", "Ajusta los parámetros y pulsa Generar ciudad. La misma seed con los mismos parámetros da siempre la misma ciudad."))
 				.AutoWrapText(true)
 			]
 
-			// Plugin content: materials, meshes and graphs
-			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("ContentSection", "Contenido")) ]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
-			[
-				SNew(STextBlock)
-				.Text(this, &SCityGeneratorPanel::GetGraphStatusText)
-				.AutoWrapText(true)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
-			[
-				SNew(SButton)
-				.HAlign(HAlign_Center)
-				.Text(LOCTEXT("CreateContent", "Crear contenido"))
-				.ToolTipText(LOCTEXT("CreateContentTip", "Crea en Content/City lo que falte: materiales, mallas y grafos. Lo que ya existe no se toca."))
-				.OnClicked(this, &SCityGeneratorPanel::OnCreateContentClicked)
-			]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				SNew(STextBlock)
-				.Text_Lambda([this]() { return ContentText; })
-				.AutoWrapText(true)
-			]
-
-			// City layout
+			// --- Streets and blocks
 			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("CitySection", "Ciudad")) ]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -99,16 +77,22 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				MakeParameterRow(LOCTEXT("BlockSize", "Tamaño de manzana (m)"),
-					LOCTEXT("BlockSizeTip", "Lado de cada manzana. Manzanas pequeñas = más cruces."),
+					LOCTEXT("BlockSizeTip", "Lado de cada manzana, acera incluida. Manzanas pequeñas generan más cruces."),
 					Params.BlockSize, 15.0, 300.0, 1.0)
 			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f, 0.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.Text(this, &SCityPanel::GetGridText)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			]
 
-			// Buildings
+			// --- Buildings
 			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("BuildingsSection", "Edificios")) ]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				MakeParameterRow(LOCTEXT("Density", "Densidad (0-1)"),
-					LOCTEXT("DensityTip", "Parte de las parcelas de fachada que se construyen: 0 = zona abierta, 1 = cañón urbano."),
+					LOCTEXT("DensityTip", "Parte de las parcelas que se construyen: 0 = zona abierta, 1 = cañón urbano."),
 					Params.BuildingDensity, 0.0, 1.0, 0.05)
 			]
 			+ SVerticalBox::Slot().AutoHeight()
@@ -120,11 +104,11 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				MakeParameterRow(LOCTEXT("Variation", "Variación (0-1)"),
-					LOCTEXT("VariationTip", "0 = todos los edificios iguales; 1 = alturas y huellas muy distintas."),
+					LOCTEXT("VariationTip", "0 = todos los edificios iguales. 1 = alturas, huellas y posiciones muy distintas."),
 					Params.BuildingVariation, 0.0, 1.0, 0.05)
 			]
 
-			// Seed
+			// --- Seed
 			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("SeedSection", "Semilla")) ]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -140,7 +124,7 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 					SNew(SButton)
 					.Text(LOCTEXT("RandomSeed", "Aleatoria"))
 					.ToolTipText(LOCTEXT("RandomSeedTip", "Elige otra seed al azar."))
-					.OnClicked(this, &SCityGeneratorPanel::OnRandomSeedClicked)
+					.OnClicked(this, &SCityPanel::OnRandomSeedClicked)
 				]
 			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)
@@ -154,7 +138,7 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 				]
 			]
 
-			// Actions
+			// --- Actions
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 4.0f)
 			[
 				SNew(SHorizontalBox)
@@ -163,8 +147,8 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 					SNew(SButton)
 					.HAlign(HAlign_Center)
 					.Text(LOCTEXT("Generate", "Generar ciudad"))
-					.ToolTipText(LOCTEXT("GenerateTip", "Borra la ciudad anterior y genera una nueva con estos parámetros."))
-					.OnClicked(this, &SCityGeneratorPanel::OnGenerateClicked)
+					.ToolTipText(LOCTEXT("GenerateTip", "Borra la ciudad anterior y genera una nueva con estos parámetros. La primera vez crea también el contenido del plugin."))
+					.OnClicked(this, &SCityPanel::OnGenerateClicked)
 				]
 				+ SHorizontalBox::Slot().FillWidth(1.0f).Padding(4.0f, 0.0f, 0.0f, 0.0f)
 				[
@@ -172,40 +156,71 @@ void SCityGeneratorPanel::Construct(const FArguments& InArgs)
 					.HAlign(HAlign_Center)
 					.Text(LOCTEXT("Cleanup", "Limpiar ciudad"))
 					.ToolTipText(LOCTEXT("CleanupTip", "Elimina por completo la ciudad generada."))
-					.OnClicked(this, &SCityGeneratorPanel::OnCleanupClicked)
+					.OnClicked(this, &SCityPanel::OnCleanupClicked)
 				]
 			]
+
+			// --- Messages: selectable, and a button to copy them
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
 			[
-				SNew(STextBlock)
-				.Text_Lambda([this]() { return StatusText; })
-				.AutoWrapText(true)
+				SNew(SBox)
+				.MaxDesiredHeight(220.0f)
+				[
+					SNew(SMultiLineEditableTextBox)
+					.IsReadOnly(true)
+					.AutoWrapText(true)
+					.Text(this, &SCityPanel::GetMessagesText)
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("Copy", "Copiar mensajes"))
+				.ToolTipText(LOCTEXT("CopyTip", "Copia los mensajes al portapapeles."))
+				.OnClicked(this, &SCityPanel::OnCopyMessagesClicked)
 			]
 
-			// What is in the level right now
+			// --- What is in the level right now
 			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("StatsSection", "Ciudad en el nivel")) ]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
 				SNew(STextBlock)
-				.Text(this, &SCityGeneratorPanel::GetStatsText)
+				.Text(this, &SCityPanel::GetStatsText)
 				.AutoWrapText(true)
+			]
+
+			// --- Content of the plugin
+			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("ContentSection", "Contenido")) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("ContentInfo", "Los materiales, las mallas y los grafos se crean solos al generar. Rehacer grafos los vuelve a montar desde el código (se pierden los cambios hechos a mano en ellos)."))
+				.AutoWrapText(true)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			]
+			+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("RebuildGraphs", "Rehacer grafos"))
+				.ToolTipText(LOCTEXT("RebuildGraphsTip", "Vuelve a montar PCG_City y sus subgrafos desde el código y genera la ciudad otra vez."))
+				.OnClicked(this, &SCityPanel::OnRebuildGraphsClicked)
 			]
 		]
 	];
 }
 
-void SCityGeneratorPanel::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+void SCityPanel::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
 {
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
 
 	if (InCurrentTime >= NextStatsRefreshTime)
 	{
-		CachedStats = Tool->ComputeStats();
+		CachedStats = Generator->ComputeStats();
 		NextStatsRefreshTime = InCurrentTime + 0.5;
 	}
 }
 
-TSharedRef<SWidget> SCityGeneratorPanel::MakeSectionHeader(const FText& Title) const
+TSharedRef<SWidget> SCityPanel::MakeSectionHeader(const FText& Title) const
 {
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 2.0f)
@@ -220,39 +235,16 @@ TSharedRef<SWidget> SCityGeneratorPanel::MakeSectionHeader(const FText& Title) c
 		];
 }
 
-FReply SCityGeneratorPanel::OnGenerateClicked()
+FReply SCityPanel::OnGenerateClicked()
 {
-	Tool->Generate(/*bFullRebuild=*/true, StatusText);
+	Generator->Generate(/*bFullRebuild=*/true, StatusText);
 	NextStatsRefreshTime = 0.0;
 	return FReply::Handled();
 }
 
-FReply SCityGeneratorPanel::OnRandomSeedClicked()
+FReply SCityPanel::OnCleanupClicked()
 {
-	Tool->Params.Seed = FMath::RandRange(0, 9999999); // only picks the number: the city still comes from it
-	OnParameterCommitted();
-	return FReply::Handled();
-}
-
-FReply SCityGeneratorPanel::OnCreateContentClicked()
-{
-	ContentText = FCityContentBuilder::Build().ToText();
-	NextGraphCheckTime = 0.0;
-	return FReply::Handled();
-}
-
-void SCityGeneratorPanel::OnParameterCommitted()
-{
-	if (bAutoRegenerate && Tool->HasCity())
-	{
-		Tool->Generate(/*bFullRebuild=*/false, StatusText);
-		NextStatsRefreshTime = 0.0;
-	}
-}
-
-FReply SCityGeneratorPanel::OnCleanupClicked()
-{
-	const int32 Removed = Tool->Cleanup();
+	const int32 Removed = Generator->Cleanup();
 	StatusText = Removed > 0
 		? FText::Format(LOCTEXT("Cleaned", "Ciudad eliminada ({0} actor/es borrados)."), Removed)
 		: LOCTEXT("NothingToClean", "No había ninguna ciudad que limpiar.");
@@ -260,7 +252,56 @@ FReply SCityGeneratorPanel::OnCleanupClicked()
 	return FReply::Handled();
 }
 
-FText SCityGeneratorPanel::GetStatsText() const
+FReply SCityPanel::OnRandomSeedClicked()
+{
+	Generator->Params.Seed = FMath::RandRange(0, 9999999); // only picks the number: the city still comes from it
+	OnParameterCommitted();
+	return FReply::Handled();
+}
+
+FReply SCityPanel::OnRebuildGraphsClicked()
+{
+	Generator->Cleanup(); // nothing may regenerate while the graphs are rebuilt
+	const FCityContent::FReport Report = FCityContent::Ensure(/*bRebuildGraphs=*/true);
+	Generator->Generate(/*bFullRebuild=*/true, StatusText);
+	Generator->LastContentReport = Report; // what the rebuild did, not the check after it
+	NextStatsRefreshTime = 0.0;
+	return FReply::Handled();
+}
+
+FReply SCityPanel::OnCopyMessagesClicked()
+{
+	FPlatformApplicationMisc::ClipboardCopy(*GetMessagesText().ToString());
+	return FReply::Handled();
+}
+
+void SCityPanel::OnParameterCommitted()
+{
+	if (bAutoRegenerate && Generator->HasCity())
+	{
+		Generator->Generate(/*bFullRebuild=*/false, StatusText);
+		NextStatsRefreshTime = 0.0;
+	}
+}
+
+FText SCityPanel::GetGridText() const
+{
+	const FCityGrid Grid = FCityGrid::Make(Generator->Params.CitySize, Generator->Params.BlockSize);
+	return FText::Format(LOCTEXT("Grid", "{0} x {0} manzanas, {1} cruces, {2} m de lado."),
+		Grid.BlocksPerSide, Grid.CrossingsPerSide() * Grid.CrossingsPerSide(), FMath::RoundToInt32(Grid.Extent() / 100.0));
+}
+
+FText SCityPanel::GetMessagesText() const
+{
+	FString Text = StatusText.ToString();
+	if (!Generator->LastContentReport.IsEmpty())
+	{
+		Text += (Text.IsEmpty() ? TEXT("") : TEXT("\n")) + Generator->LastContentReport.ToString();
+	}
+	return FText::FromString(Text);
+}
+
+FText SCityPanel::GetStatsText() const
 {
 	const FCityStats& Stats = CachedStats;
 	if (Stats.NumCities == 0)
@@ -285,21 +326,6 @@ FText SCityGeneratorPanel::GetStatsText() const
 	Lines.Add(FText::Format(LOCTEXT("Fingerprint", "Huella: {0}  (misma seed y parámetros = misma huella)"), FText::FromString(FString::Printf(TEXT("%08X"), Stats.Fingerprint))).ToString());
 
 	return FText::FromString(FString::Join(Lines, TEXT("\n")));
-}
-
-FText SCityGeneratorPanel::GetGraphStatusText() const
-{
-	// The text is read every frame but the check touches the disk: refresh it once per second
-	const double Now = FPlatformTime::Seconds();
-	if (Now >= NextGraphCheckTime)
-	{
-		bGraphAvailable = FCityGeneratorTool::IsGraphAvailable();
-		NextGraphCheckTime = Now + 1.0;
-	}
-
-	return bGraphAvailable
-		? LOCTEXT("GraphFound", "Grafo PCG_City: encontrado.")
-		: FText::Format(LOCTEXT("GraphMissing", "Grafo PCG_City: NO encontrado en {0}. Créalo siguiendo Docs/Grafos.md."), FText::FromString(FCityGeneratorTool::GraphPackage));
 }
 
 #undef LOCTEXT_NAMESPACE

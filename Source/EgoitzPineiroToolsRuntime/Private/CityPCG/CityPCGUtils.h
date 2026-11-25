@@ -11,10 +11,10 @@ class UPCGData;
 /**
  * Helpers shared by the city nodes.
  *
- * Every layer of the city is a set of points read as boxes: the point transform carries the
+ * Streets, blocks, lots and buildings are points read as boxes: the point transform carries the
  * position, the yaw and the size (as scale), and the bounds are a 1 m cube (+-50 cm). That is
  * exactly the engine cube (/Engine/BasicShapes/Cube), so a Static Mesh Spawner with that mesh
- * draws each point at its real size, and Self Pruning or Distance see the real boxes.
+ * draws each point at its real size, and Self Pruning sees the real boxes.
  */
 namespace CityPCG
 {
@@ -28,20 +28,25 @@ namespace CityPCG
 
 		double Top() const { return Center.Z + 0.5 * Size.Z; }
 		double Bottom() const { return Center.Z - 0.5 * Size.Z; }
+		double MinX() const { return Center.X - 0.5 * Size.X; }
+		double MaxX() const { return Center.X + 0.5 * Size.X; }
+		double MinY() const { return Center.Y - 0.5 * Size.Y; }
+		double MaxY() const { return Center.Y + 0.5 * Size.Y; }
 	};
 
-	/** Reads every point connected to a pin as a box, in input order. Non-point data is ignored. */
+	/** Reads every point connected to a pin as a box, in input order. Data that is not points is ignored. */
 	TArray<FCityBox> ReadBoxes(const FPCGContext* Context, FName PinLabel);
 
 	/** Transform that turns a +-50 cm point (the engine cube) into a box of the given size and yaw. */
 	FTransform MakeBoxTransform(const FVector& Center, const FVector& Size, double YawDegrees = 0.0);
 
 	/**
-	 * New point data with NumPoints points. Transform, seed and metadata entry are allocated and
-	 * every point gets its own metadata entry, ready for attributes. All points share the same
-	 * local bounds: +-Extents (50 cm by default, the engine cube).
+	 * New point data with NumPoints points. Transform, seed and metadata entry are allocated (plus
+	 * ExtraProperties), and every point gets its own metadata entry, ready for attributes. All points
+	 * share the same local bounds: +-Extents (50 cm by default, the engine cube).
 	 */
-	UPCGBasePointData* NewPoints(FPCGContext* Context, int32 NumPoints, const FVector& Extents = FVector(50.0));
+	UPCGBasePointData* NewPoints(FPCGContext* Context, int32 NumPoints, const FVector& Extents = FVector(50.0),
+		EPCGPointNativeProperties ExtraProperties = EPCGPointNativeProperties::None);
 
 	/** Creates a per-point attribute on the point data. */
 	template <typename T>
@@ -52,25 +57,4 @@ namespace CityPCG
 
 	/** Sends a data object to an output pin. */
 	void AddOutput(FPCGContext* Context, UPCGData* Data, FName PinLabel);
-
-	/**
-	 * A street grid recovered from a set of crossings: the distinct X and Y coordinates, sorted,
-	 * give the column and row of each crossing. This is how blocks and streets derive from the
-	 * crossings instead of recomputing the grid from the parameters.
-	 */
-	struct FCrossingGrid
-	{
-		TArray<double> Xs;                  // distinct crossing X, ascending (one per column)
-		TArray<double> Ys;                  // distinct crossing Y, ascending (one per row)
-		TArray<FIntPoint> Cells;            // (Col, Row) of each crossing, same order as the input
-		TMap<FIntPoint, int32> CellToIndex; // crossing index at (Col, Row)
-
-		int32 Find(int32 Col, int32 Row) const
-		{
-			const int32* Index = CellToIndex.Find(FIntPoint(Col, Row));
-			return Index ? *Index : INDEX_NONE;
-		}
-	};
-
-	FCrossingGrid BuildCrossingGrid(const TArray<FCityBox>& Crossings);
 }

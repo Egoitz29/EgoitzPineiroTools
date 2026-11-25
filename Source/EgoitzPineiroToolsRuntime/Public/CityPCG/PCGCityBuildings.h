@@ -4,17 +4,15 @@
 #include "PCGCityBuildings.generated.h"
 
 /**
- * Layer 5 of the city: one building box on each lot that reaches this node.
+ * Turns each lot that reaches it into a building box. Every random value comes from the PCG seed
+ * and the lot's own $Seed, so the same seed always gives the same buildings:
  *
- * Which lots get a building is decided before, with standard PCG nodes (Attribute Filter on
- * Frontage, Attribute Noise on $Density, Density Filter with BuildingDensity). This node only
- * decides the shape, and every random value comes from the PCG seed and the lot's own $Seed:
+ *   height    = Max(MinHeight, BuildingHeight * (1 + BuildingVariation * Rand(-0.75, 0.75)))
+ *   footprint = lot * (MaxFootprint - FootprintVariation * BuildingVariation * Rand(0, 1)), per axis
+ *   position  = lot centre + Rand(-1, 1) * Min(PositionJitter, half the free margin), per axis
  *
- * height    = Max(MinHeight, BuildingHeight * (1 + BuildingVariation * Rand(-0.75, 0.75)))
- * footprint = lot * (MaxFootprint - FootprintVariation * BuildingVariation * Rand(0, 1)), per axis
- *
- * The footprint is always smaller than the lot, so a building never reaches the sidewalk.
- * The building keeps the lot's yaw (it faces the street). Output attributes: Height (m), Floors.
+ * The footprint is always smaller than the lot and the jitter never takes the building out of it,
+ * so a building never reaches the sidewalk. Attributes Height (m) and Floors.
  */
 UCLASS(BlueprintType, ClassGroup = (Procedural))
 class EGOITZPINEIROTOOLSRUNTIME_API UPCGCityBuildingsSettings : public UPCGSettings
@@ -41,7 +39,7 @@ public:
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "1.0", ForceUnits = "m"))
 	double BuildingHeight = 30.0;
 
-	/** 0 = all buildings alike, 1 = very different heights and footprints. Connect the BuildingVariation Graph Parameter here. */
+	/** 0 = all buildings alike, 1 = very different heights, footprints and positions. Connect the BuildingVariation Graph Parameter here. */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.0", ClampMax = "1.0"))
 	double BuildingVariation = 0.5;
 
@@ -49,13 +47,17 @@ public:
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "1.0", ForceUnits = "m"))
 	double MinHeight = 3.0;
 
-	/** Largest share of the lot a building covers (per axis). Below 1 so there is always a gap between buildings. */
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.1", ClampMax = "1.0"))
-	double MaxFootprint = 0.9;
+	/** Largest share of the lot a building covers, per axis. Below 1 so there is always a gap between buildings. */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.1", ClampMax = "0.95"))
+	double MaxFootprint = 0.85;
 
 	/** How much smaller the footprint can get when BuildingVariation is 1 (share of the lot). */
-	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.0", ClampMax = "0.9"))
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.0", ClampMax = "0.8"))
 	double FootprintVariation = 0.3;
+
+	/** Largest shift of a building inside its lot, in metres (scaled by BuildingVariation). */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = Settings, meta = (PCG_Overridable, ClampMin = "0.0", ForceUnits = "m"))
+	double PositionJitter = 1.0;
 };
 
 class FPCGCityBuildingsElement : public IPCGElement

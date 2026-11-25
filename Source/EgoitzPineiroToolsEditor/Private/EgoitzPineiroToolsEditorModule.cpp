@@ -1,43 +1,43 @@
-#include "EgoitzPineiroTools.h"
+#include "EgoitzPineiroToolsEditorModule.h"
 
 #include "Brushes/SlateImageBrush.h"
-#include "CityGeneratorTool.h"
+#include "CityGenerator.h"
 #include "Interfaces/IPluginManager.h"
-#include "SCityGeneratorPanel.h"
+#include "SCityPanel.h"
 #include "Styling/SlateStyle.h"
 #include "Styling/SlateStyleRegistry.h"
 #include "ToolMenus.h"
 #include "Widgets/Docking/SDockTab.h"
 
-#define LOCTEXT_NAMESPACE "FEgoitzPineiroToolsModule"
+#define LOCTEXT_NAMESPACE "FEgoitzPineiroToolsEditorModule"
 
 namespace
 {
-	const FName CityGeneratorTabName(TEXT("EPT_CityGenerator"));
+	const FName CityTabName(TEXT("EPT_CityGenerator"));
 	const FName StyleSetName(TEXT("EgoitzPineiroToolsStyle"));
 	const FName CityIconName(TEXT("EgoitzPineiroTools.CityIcon"));
 }
 
-void FEgoitzPineiroToolsModule::StartupModule()
+void FEgoitzPineiroToolsEditorModule::StartupModule()
 {
-	CityTool = MakeShared<FCityGeneratorTool>();
+	Generator = MakeShared<FCityGenerator>();
 	RegisterStyle();
 
-	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(CityGeneratorTabName,
-		FOnSpawnTab::CreateRaw(this, &FEgoitzPineiroToolsModule::OnSpawnCityGeneratorTab))
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(CityTabName,
+		FOnSpawnTab::CreateRaw(this, &FEgoitzPineiroToolsEditorModule::OnSpawnCityTab))
 		.SetDisplayName(LOCTEXT("TabTitle", "Generador de ciudades"))
 		.SetTooltipText(LOCTEXT("TabTooltip", "Configura, genera y limpia ciudades procedurales con PCG."))
 		.SetIcon(FSlateIcon(StyleSetName, CityIconName));
 
-	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FEgoitzPineiroToolsModule::RegisterMenus));
+	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FEgoitzPineiroToolsEditorModule::RegisterMenus));
 }
 
-void FEgoitzPineiroToolsModule::ShutdownModule()
+void FEgoitzPineiroToolsEditorModule::ShutdownModule()
 {
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::UnregisterOwner(this);
 
-	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(CityGeneratorTabName);
+	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(CityTabName);
 
 	if (StyleSet.IsValid())
 	{
@@ -45,10 +45,10 @@ void FEgoitzPineiroToolsModule::ShutdownModule()
 		StyleSet.Reset();
 	}
 
-	CityTool.Reset();
+	Generator.Reset();
 }
 
-void FEgoitzPineiroToolsModule::RegisterStyle()
+void FEgoitzPineiroToolsEditorModule::RegisterStyle()
 {
 	StyleSet = MakeShared<FSlateStyleSet>(StyleSetName);
 
@@ -61,12 +61,12 @@ void FEgoitzPineiroToolsModule::RegisterStyle()
 	FSlateStyleRegistry::RegisterSlateStyle(*StyleSet);
 }
 
-void FEgoitzPineiroToolsModule::RegisterMenus()
+void FEgoitzPineiroToolsEditorModule::RegisterMenus()
 {
 	FToolMenuOwnerScoped OwnerScoped(this);
 
 	const FSlateIcon Icon(StyleSetName, CityIconName);
-	const FUIAction OpenAction(FExecuteAction::CreateRaw(this, &FEgoitzPineiroToolsModule::OpenCityGeneratorTab));
+	const FUIAction OpenAction(FExecuteAction::CreateRaw(this, &FEgoitzPineiroToolsEditorModule::OpenCityTab));
 
 	// Tools > Generador de ciudades
 	if (UToolMenu* ToolsMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Tools"))
@@ -78,7 +78,7 @@ void FEgoitzPineiroToolsModule::RegisterMenus()
 			Icon, OpenAction);
 	}
 
-	// Button in the level editor toolbar, next to Play
+	// "Ciudad" button in the level editor toolbar, next to Play
 	if (UToolMenu* Toolbar = UToolMenus::Get()->ExtendMenu("LevelEditor.LevelEditorToolBar.PlayToolBar"))
 	{
 		FToolMenuSection& Section = Toolbar->FindOrAddSection("PluginTools");
@@ -89,21 +89,21 @@ void FEgoitzPineiroToolsModule::RegisterMenus()
 	}
 }
 
-void FEgoitzPineiroToolsModule::OpenCityGeneratorTab()
+void FEgoitzPineiroToolsEditorModule::OpenCityTab()
 {
-	FGlobalTabmanager::Get()->TryInvokeTab(CityGeneratorTabName);
+	FGlobalTabmanager::Get()->TryInvokeTab(CityTabName);
 }
 
-TSharedRef<SDockTab> FEgoitzPineiroToolsModule::OnSpawnCityGeneratorTab(const FSpawnTabArgs& Args)
+TSharedRef<SDockTab> FEgoitzPineiroToolsEditorModule::OnSpawnCityTab(const FSpawnTabArgs& Args)
 {
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
 		[
-			SNew(SCityGeneratorPanel)
-			.Tool(CityTool)
+			SNew(SCityPanel)
+			.Generator(Generator)
 		];
 }
 
 #undef LOCTEXT_NAMESPACE
 
-IMPLEMENT_MODULE(FEgoitzPineiroToolsModule, EgoitzPineiroTools)
+IMPLEMENT_MODULE(FEgoitzPineiroToolsEditorModule, EgoitzPineiroToolsEditor)

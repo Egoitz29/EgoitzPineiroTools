@@ -4,15 +4,15 @@
 #include "Framework/Docking/TabManager.h"
 #include "Modules/ModuleManager.h"
 
-class FCityGeneratorTool;
+class FCityGenerator;
 class FSlateStyleSet;
 class SDockTab;
 
 /**
  * Editor module of the plugin. Registers the "Generador de ciudades" tab and opens it from
- * Tools > Generador de ciudades and from a button in the level editor toolbar.
+ * Tools > Generador de ciudades and from the "Ciudad" button of the level editor toolbar.
  */
-class FEgoitzPineiroToolsModule : public IModuleInterface
+class FEgoitzPineiroToolsEditorModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;
@@ -21,11 +21,11 @@ public:
 private:
 	void RegisterStyle();
 	void RegisterMenus();
-	void OpenCityGeneratorTab();
-	TSharedRef<SDockTab> OnSpawnCityGeneratorTab(const FSpawnTabArgs& Args);
+	void OpenCityTab();
+	TSharedRef<SDockTab> OnSpawnCityTab(const FSpawnTabArgs& Args);
 
 	/** Parameters and actions of the tool. Lives as long as the module, so the values survive closing the tab. */
-	TSharedPtr<FCityGeneratorTool> CityTool;
+	TSharedPtr<FCityGenerator> Generator;
 
 	/** Icon of the tab, the menu entry and the toolbar button (Resources/Icon128.png). */
 	TSharedPtr<FSlateStyleSet> StyleSet;

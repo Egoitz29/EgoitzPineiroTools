@@ -1,11 +1,11 @@
-#include "CityGeneratorActor.h"
+#include "ProceduralCityActor.h"
 
 #include "Components/BoxComponent.h"
 #include "PCGComponent.h"
 
-const FName ACityGeneratorActor::GeneratedTag(TEXT("EPT_CityGenerated"));
+const FName AProceduralCityActor::GeneratedTag(TEXT("EPT_CityGenerated"));
 
-ACityGeneratorActor::ACityGeneratorActor()
+AProceduralCityActor::AProceduralCityActor()
 {
 	PrimaryActorTick.bCanEverTick = false;
 
@@ -15,14 +15,14 @@ ACityGeneratorActor::ACityGeneratorActor()
 	RootComponent = CityBounds;
 
 	PCGComponent = CreateDefaultSubobject<UPCGComponent>(TEXT("PCG"));
-	// Only the tool decides when to generate: nothing regenerates by itself when the level loads.
+	// Only the tool decides when to generate: nothing regenerates by itself when the level loads
 	PCGComponent->GenerationTrigger = EPCGComponentGenerationTrigger::GenerateOnDemand;
 
 	Tags.Add(GeneratedTag);
 }
 
-void ACityGeneratorActor::SetCitySize(double CitySizeMeters)
+void AProceduralCityActor::SetCityExtent(double ExtentCm)
 {
-	const double HalfSide = FMath::Max(CitySizeMeters, 1.0) * 50.0; // metres -> cm, halved
-	CityBounds->SetBoxExtent(FVector(HalfSide, HalfSide, 5000.0));
+	const double Half = 0.5 * FMath::Max(ExtentCm, 100.0);
+	CityBounds->SetBoxExtent(FVector(Half, Half, 5000.0));
 }

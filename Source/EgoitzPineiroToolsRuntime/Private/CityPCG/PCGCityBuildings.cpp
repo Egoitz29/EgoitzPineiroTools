@@ -18,7 +18,7 @@ namespace
 #if WITH_EDITOR
 FText UPCGCityBuildingsSettings::GetNodeTooltipText() const
 {
-	return LOCTEXT("Tooltip", "Turns each lot into a building box: height and footprint vary with BuildingVariation, always from the seed.");
+	return LOCTEXT("Tooltip", "One building box per lot: height, footprint and position vary with BuildingVariation, always from the seed.");
 }
 #endif
 
@@ -53,8 +53,9 @@ bool FPCGCityBuildingsElement::ExecuteInternal(FPCGContext* Context) const
 	const double AverageHeight = FMath::Max(Settings->BuildingHeight, 1.0) * 100.0;
 	const double MinHeight = FMath::Max(Settings->MinHeight, 1.0) * 100.0;
 	const double Variation = FMath::Clamp(Settings->BuildingVariation, 0.0, 1.0);
-	const double MaxFootprint = FMath::Clamp(Settings->MaxFootprint, 0.1, 1.0);
+	const double MaxFootprint = FMath::Clamp(Settings->MaxFootprint, 0.1, 0.95);
 	const double FootprintVariation = FMath::Clamp(Settings->FootprintVariation, 0.0, MaxFootprint - 0.05);
+	const double Jitter = FMath::Max(Settings->PositionJitter, 0.0) * 100.0 * Variation;
 	const int32 GraphSeed = Context->GetSeed(); // node seed combined with the PCG Component seed
 
 	UPCGBasePointData* Points = CityPCG::NewPoints(Context, Lots.Num());
@@ -75,9 +76,12 @@ bool FPCGCityBuildingsElement::ExecuteInternal(FPCGContext* Context) const
 		const double Height = FMath::Max(MinHeight, AverageHeight * (1.0 + Spread));
 		const double FootprintX = MaxFootprint - FootprintVariation * Variation * Random.FRand();
 		const double FootprintY = MaxFootprint - FootprintVariation * Variation * Random.FRand();
-
 		const FVector Size(Lot.Size.X * FootprintX, Lot.Size.Y * FootprintY, Height);
-		const FVector Center(Lot.Center.X, Lot.Center.Y, Lot.Bottom() + 0.5 * Height); // standing on the lot
+
+		// Half of the free margin at most: the rest is left for the small rotation added later
+		const double ShiftX = FMath::Min(Jitter, 0.25 * (Lot.Size.X - Size.X)) * Random.FRandRange(-1.0f, 1.0f);
+		const double ShiftY = FMath::Min(Jitter, 0.25 * (Lot.Size.Y - Size.Y)) * Random.FRandRange(-1.0f, 1.0f);
+		const FVector Center(Lot.Center.X + ShiftX, Lot.Center.Y + ShiftY, Lot.Bottom() + 0.5 * Height); // standing on the lot
 
 		Transforms[Index] = CityPCG::MakeBoxTransform(Center, Size, Lot.Yaw);
 		Seeds[Index] = Lot.Seed;

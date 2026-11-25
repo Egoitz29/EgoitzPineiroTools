@@ -3,16 +3,31 @@
 #include "CityPCG/CityPCGNames.h"
 #include "CityPCGUtils.h"
 #include "Helpers/PCGHelpers.h"
+#include "Math/RandomStream.h"
 #include "PCGContext.h"
 #include "PCGPin.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 #define LOCTEXT_NAMESPACE "PCGCityLots"
 
+namespace
+{
+	constexpr double MinLotSize = 200.0;  // cm: anything narrower is not a lot
+	constexpr double LotThickness = 10.0; // cm: lots are flat boxes on top of the block
+
+	struct FLot
+	{
+		FVector Center;
+		FVector Size;
+		int32 BlockID;
+		int32 Side;
+	};
+}
+
 #if WITH_EDITOR
 FText UPCGCityLotsSettings::GetNodeTooltipText() const
 {
-	return LOCTEXT("Tooltip", "Splits the inside of each block (without its sidewalk) into lots facing the street. Frontage marks the lots that touch the sidewalk.");
+	return LOCTEXT("Tooltip", "Building lots facing the street inside each block. $Density >= 0.5 means the lot is built (see BuildingDensity).");
 }
 #endif
 
@@ -43,86 +58,84 @@ bool FPCGCityLotsElement::ExecuteInternal(FPCGContext* Context) const
 	check(Settings);
 
 	const TArray<CityPCG::FCityBox> Blocks = CityPCG::ReadBoxes(Context, CityPCGNames::BlocksPin);
-	if (Blocks.IsEmpty())
-	{
-		return true; // no blocks, no lots
-	}
 
-	const double SidewalkWidth = FMath::Max(Settings->SidewalkWidth, 0.5) * 100.0;
-	const double TargetLotSize = FMath::Max(Settings->LotSize, 2.0) * 100.0;
-	constexpr double LotThickness = 10.0; // cm: a lot is a flat footprint on top of the block
+	const double BuildingDensity = FMath::Clamp(Settings->BuildingDensity, 0.0, 1.0);
+	const double Sidewalk = FMath::Max(Settings->SidewalkWidth, 0.0) * 100.0;
+	const double TargetDepth = FMath::Max(Settings->LotDepth, 2.0) * 100.0;
+	const double TargetWidth = FMath::Max(Settings->LotWidth, 2.0) * 100.0;
+	const int32 GraphSeed = Context->GetSeed(); // node seed combined with the PCG Component seed
 
-	struct FLot
-	{
-		FVector Center;
-		FVector LocalSize; // X = towards the street, after the yaw
-		double Yaw;
-		int32 BlockID;
-		bool bFrontage;
-	};
 	TArray<FLot> Lots;
-
 	for (int32 BlockIndex = 0; BlockIndex < Blocks.Num(); ++BlockIndex)
 	{
 		const CityPCG::FCityBox& Block = Blocks[BlockIndex];
 
-		// Buildings only go inside the sidewalk ring
-		const double InnerX = Block.Size.X - 2.0 * SidewalkWidth;
-		const double InnerY = Block.Size.Y - 2.0 * SidewalkWidth;
-		if (InnerX < 100.0 || InnerY < 100.0)
+		// The area inside the sidewalk ring
+		const double X0 = Block.MinX() + Sidewalk;
+		const double X1 = Block.MaxX() - Sidewalk;
+		const double Y0 = Block.MinY() + Sidewalk;
+		const double Y1 = Block.MaxY() - Sidewalk;
+		if (X1 - X0 < MinLotSize || Y1 - Y0 < MinLotSize)
 		{
-			continue; // the sidewalk takes the whole block
+			continue;
 		}
 
-		const int32 NumX = FMath::Max(1, FMath::RoundToInt32(InnerX / TargetLotSize));
-		const int32 NumY = FMath::Max(1, FMath::RoundToInt32(InnerY / TargetLotSize));
-		const double LotX = InnerX / NumX; // the lots fill the block exactly
-		const double LotY = InnerY / NumY;
-		const double Ground = Block.Top();
+		const double Depth = FMath::Min(TargetDepth, 0.5 * FMath::Min(X1 - X0, Y1 - Y0));
+		const double Z = Block.Top() + 0.5 * LotThickness;
 
-		for (int32 J = 0; J < NumY; ++J)
+		// A row of lots between Start and End along one axis, from Near to Far across it
+		auto AddRow = [&](double Start, double End, double Near, double Far, bool bAlongX, int32 Side)
 		{
-			for (int32 I = 0; I < NumX; ++I)
+			const double Length = End - Start;
+			if (Length < MinLotSize)
 			{
-				FLot& Lot = Lots.AddDefaulted_GetRef();
-				Lot.Center = FVector(
-					Block.Center.X - 0.5 * InnerX + (I + 0.5) * LotX,
-					Block.Center.Y - 0.5 * InnerY + (J + 0.5) * LotY,
-					Ground + 0.5 * LotThickness);
-				Lot.BlockID = BlockIndex;
-				Lot.bFrontage = I == 0 || J == 0 || I == NumX - 1 || J == NumY - 1;
-
-				// Face the closest side of the block, snapped to 90 degrees
-				const double DX = (Lot.Center.X - Block.Center.X) / InnerX;
-				const double DY = (Lot.Center.Y - Block.Center.Y) / InnerY;
-				if (FMath::Abs(DX) >= FMath::Abs(DY))
-				{
-					Lot.Yaw = DX >= 0.0 ? 0.0 : 180.0;
-					Lot.LocalSize = FVector(LotX, LotY, LotThickness);
-				}
-				else
-				{
-					Lot.Yaw = DY >= 0.0 ? 90.0 : -90.0;
-					Lot.LocalSize = FVector(LotY, LotX, LotThickness); // rotated 90: local X is world Y
-				}
+				return;
 			}
-		}
+			const int32 Count = FMath::Max(1, FMath::FloorToInt32(Length / TargetWidth + 0.5));
+			const double Width = Length / Count;
+			const double Across = 0.5 * (Near + Far);
+			const double DepthSize = FMath::Abs(Far - Near);
+
+			for (int32 Step = 0; Step < Count; ++Step)
+			{
+				const double Along = Start + (Step + 0.5) * Width;
+				FLot& Lot = Lots.AddDefaulted_GetRef();
+				Lot.Center = bAlongX ? FVector(Along, Across, Z) : FVector(Across, Along, Z);
+				Lot.Size = bAlongX ? FVector(Width, DepthSize, LotThickness) : FVector(DepthSize, Width, LotThickness);
+				Lot.BlockID = BlockIndex;
+				Lot.Side = Side;
+			}
+		};
+
+		AddRow(X0, X1, Y0, Y0 + Depth, /*bAlongX=*/true, 0);                 // south, corners included
+		AddRow(Y0 + Depth, Y1 - Depth, X1 - Depth, X1, /*bAlongX=*/false, 1); // east, between the corners
+		AddRow(X0, X1, Y1 - Depth, Y1, /*bAlongX=*/true, 2);                 // north, corners included
+		AddRow(Y0 + Depth, Y1 - Depth, X0, X0 + Depth, /*bAlongX=*/false, 3); // west, between the corners
 	}
 
-	UPCGBasePointData* Points = CityPCG::NewPoints(Context, Lots.Num());
+	UPCGBasePointData* Points = CityPCG::NewPoints(Context, Lots.Num(), FVector(50.0), EPCGPointNativeProperties::Density);
 	auto Transforms = Points->GetTransformValueRange(/*bAllocate=*/false);
 	auto Seeds = Points->GetSeedValueRange(/*bAllocate=*/false);
+	auto Densities = Points->GetDensityValueRange(/*bAllocate=*/false);
 	auto Entries = Points->GetMetadataEntryValueRange(/*bAllocate=*/false);
 	FPCGMetadataAttribute<int32>* BlockIDAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::BlockID, 0);
-	FPCGMetadataAttribute<bool>* FrontageAttribute = CityPCG::CreateAttribute<bool>(Points, CityPCGNames::Frontage, false);
+	FPCGMetadataAttribute<int32>* SideAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::Side, 0);
 
 	for (int32 Index = 0; Index < Lots.Num(); ++Index)
 	{
 		const FLot& Lot = Lots[Index];
-		Transforms[Index] = CityPCG::MakeBoxTransform(Lot.Center, Lot.LocalSize, Lot.Yaw);
-		Seeds[Index] = PCGHelpers::ComputeSeedFromPosition(Lot.Center); // stable per lot: later nodes draw from it
+		const int32 LotSeed = PCGHelpers::ComputeSeedFromPosition(Lot.Center);
+
+		// One random stream per lot: the lot decides alone, whatever happens to the others
+		FRandomStream Random(PCGHelpers::ComputeSeed(GraphSeed, LotSeed));
+		const double Roll = Random.FRand();
+		const double Density = BuildingDensity <= 0.0 ? 0.0 : FMath::Clamp(1.0 - 0.5 * Roll / BuildingDensity, 0.0, 1.0);
+
+		Transforms[Index] = CityPCG::MakeBoxTransform(Lot.Center, Lot.Size);
+		Seeds[Index] = LotSeed;
+		Densities[Index] = static_cast<float>(Density);
 		BlockIDAttribute->SetValue(Entries[Index], Lot.BlockID);
-		FrontageAttribute->SetValue(Entries[Index], Lot.bFrontage);
+		SideAttribute->SetValue(Entries[Index], Lot.Side);
 	}
 
 	CityPCG::AddOutput(Context, Points, CityPCGNames::LotsPin);
