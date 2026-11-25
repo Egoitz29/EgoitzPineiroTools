@@ -25,8 +25,8 @@ están dentro del plugin.
 ## Uso
 
 0. **La primera vez:** en el panel, pulsa **Crear contenido**. Crea en `Content/City` del plugin los
-   materiales, las mallas de mobiliario y los grafos PCG. Solo crea lo que falta, así que se puede pulsar
-   otra vez sin peligro.
+   materiales, las mallas de mobiliario y los grafos PCG. Solo crea lo que falta y rehace los grafos que
+   hayan quedado incompletos, así que se puede pulsar otra vez sin peligro.
 1. Abre el panel con el botón **Ciudad** de la barra de herramientas o con
    *Tools › Generador de ciudades*.
 2. Ajusta los parámetros y pulsa **Generar ciudad**. La ciudad aparece centrada en el origen del nivel,

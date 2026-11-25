@@ -4,8 +4,10 @@ Este documento describe, nodo a nodo, los grafos que hay en `Content/City`. Sirv
 hace cada uno antes de ampliarlo, o para montarlos a mano.
 
 **Todo este contenido lo crea el botón *Crear contenido* del panel** (código en
-`Source/EgoitzPineiroTools/Private/CityContentBuilder.cpp`). El botón solo crea lo que falta: para
-rehacer un asset, bórralo en el Content Browser y vuelve a pulsarlo. Si algo no encaja con la versión
+`Source/EgoitzPineiroTools/Private/CityContentBuilder.cpp`). El botón solo crea lo que falta y rehace
+los grafos que hayan quedado incompletos (sin cablear sus pines de entrada y salida). Un grafo completo
+no se toca, aunque lo hayas cambiado a mano. Para rehacer cualquier otro asset, bórralo en el Content
+Browser y vuelve a pulsarlo. Si algo no encaja con la versión
 del motor, el panel muestra el error con el nombre de la propiedad o del pin que falla.
 
 La lógica que depende de bucles y de geometría (rejilla, tramos, manzanas, parcelas, forma de los

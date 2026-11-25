@@ -191,6 +191,56 @@ namespace
 		return FString::Join(Labels, TEXT(", "));
 	}
 
+	bool IsPinWired(const UPCGPin* Pin)
+	{
+		return Pin && Pin->Edges.Num() > 0;
+	}
+
+	/**
+	 * True if the graph's Input node has these output pins and its Output node these input pins, all
+	 * of them wired. A graph left half-built by an earlier version of the builder fails this check.
+	 */
+	bool HasWiredInputOutput(UPCGGraph* Graph, const TArray<FName>& InputNodePins, const TArray<FName>& OutputNodePins)
+	{
+		for (const FName& Label : InputNodePins)
+		{
+			if (!IsPinWired(Graph->GetInputNode()->GetOutputPin(Label)))
+			{
+				return false;
+			}
+		}
+		for (const FName& Label : OutputNodePins)
+		{
+			if (!IsPinWired(Graph->GetOutputNode()->GetInputPin(Label)))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** True if, for every label, some node of the graph has a wired input pin with it (the Subgraph nodes of PCG_City). */
+	bool HasWiredNodeInputs(UPCGGraph* Graph, const TArray<FName>& Labels)
+	{
+		for (const FName& Label : Labels)
+		{
+			bool bWired = false;
+			for (UPCGNode* Node : Graph->GetNodes())
+			{
+				if (Node && IsPinWired(Node->GetInputPin(Label)))
+				{
+					bWired = true;
+					break;
+				}
+			}
+			if (!bWired)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	/**
 	 * Writes nodes and edges into a PCG graph. The standard PCG nodes are found by class name and
 	 * their properties are set by reflection, from text, exactly as Copy/Paste does in Details: the
@@ -422,23 +472,43 @@ namespace
 
 			FPropertyChangedEvent Event(Array, EPropertyChangeType::ArrayAdd);
 			static_cast<UObject*>(Settings)->PostEditChangeProperty(Event);
+			RefreshInputOutputPins(Node);
 
-			// The Input and Output nodes come with the graph and do not always listen to their settings,
-			// so the change above may leave their pins as they were: rebuild them from the settings.
-			if (!HasPin(Node, Label))
-			{
-				Node->SetSettingsInterface(Node->GetSettingsInterface(), /*bUpdatePins=*/true);
-			}
-			if (!HasPin(Node, Label))
+			if (!Node->GetInputPin(Label) && !Node->GetOutputPin(Label))
 			{
 				Fail(FString::Printf(TEXT("el pin '%s' no aparece en %s después de añadirlo. Entradas: %s. Salidas: %s"),
 					*Label.ToString(), *Settings->GetClass()->GetName(), *ListPins(Node->GetInputPins()), *ListPins(Node->GetOutputPins())));
 			}
 		}
 
-		static bool HasPin(UPCGNode* Node, FName Label)
+		/** Leaves the graph as a new one: no nodes besides Input and Output, and no custom pins on them. */
+		void Clear()
 		{
-			return Node->GetInputPin(Label) || Node->GetOutputPin(Label);
+			TArray<UPCGNode*> Nodes;
+			for (UPCGNode* Node : Graph->GetNodes())
+			{
+				Nodes.Add(Node);
+			}
+			for (UPCGNode* Node : Nodes)
+			{
+				Graph->RemoveNode(Node);
+			}
+
+			for (UPCGNode* Node : { Graph->GetInputNode(), Graph->GetOutputNode() })
+			{
+				UPCGSettings* Settings = Node ? Node->GetSettings() : nullptr;
+				FArrayProperty* Array = Settings ? FindFProperty<FArrayProperty>(Settings->GetClass(), TEXT("CustomPins")) : nullptr;
+				if (!Array)
+				{
+					continue;
+				}
+				FScriptArrayHelper Helper(Array, Array->ContainerPtrToValuePtr<void>(Settings));
+				Helper.EmptyValues();
+
+				FPropertyChangedEvent Event(Array, EPropertyChangeType::ArrayClear);
+				static_cast<UObject*>(Settings)->PostEditChangeProperty(Event);
+				RefreshInputOutputPins(Node);
+			}
 		}
 
 		/** Makes a Subgraph node run the given graph. */
@@ -465,6 +535,15 @@ namespace
 		UPCGGraph* GetGraph() const { return Graph; }
 
 	private:
+		/**
+		 * The Input and Output nodes come with the graph and do not always listen to their settings, so
+		 * changing their custom pins may leave the node pins as they were: rebuild them from the settings.
+		 */
+		static void RefreshInputOutputPins(UPCGNode* Node)
+		{
+			Node->SetSettingsInterface(Node->GetSettingsInterface(), /*bUpdatePins=*/true);
+		}
+
 		void Fail(const FString& Message)
 		{
 			OnError(FString::Printf(TEXT("%s: %s"), *Graph->GetName(), *Message));
@@ -492,14 +571,14 @@ namespace
 
 FText FCityContentBuilder::FReport::ToText() const
 {
-	FString Text = FString::Printf(TEXT("Creados: %d · Ya existían: %d · Errores: %d"), Created.Num(), Skipped.Num(), Errors.Num());
+	FString Text = FString::Printf(TEXT("Creados: %d · Rehechos: %d · Ya existían: %d · Errores: %d"), Created.Num(), Rebuilt.Num(), Skipped.Num(), Errors.Num());
 	for (const FString& Message : Errors)
 	{
 		Text += TEXT("\n- ") + Message;
 	}
 	if (!Errors.IsEmpty())
 	{
-		Text += TEXT("\nLos assets que ya existen no se rehacen: para rehacer uno con errores, bórralo en el Content Browser y pulsa Crear contenido otra vez.");
+		Text += TEXT("\nUn grafo que queda incompleto se rehace la próxima vez que pulses Crear contenido. Un material o una malla con errores, bórralo en el Content Browser para rehacerlo.");
 	}
 	return FText::FromString(Text);
 }
@@ -674,16 +753,27 @@ void FCityContentBuilder::BuildGraphs()
 	auto MaterialPath = [](const TCHAR* Name) { return ObjectPathOf(FString(FCityContentBuilder::MaterialsPath) / Name); };
 	auto MeshPath = [](const TCHAR* Name) { return ObjectPathOf(FString(FCityContentBuilder::MeshesPath) / Name); };
 
-	// True if the graph is new and has to be filled; false if it already existed (it is kept as it is)
-	auto StartGraph = [this](const FString& PackageName, UPCGGraph*& OutGraph)
+	// True if the graph has to be filled: it is new, or it existed but is incomplete (an earlier run
+	// could not wire it), and then it is emptied first. A complete graph is kept as it is, with any
+	// change made to it by hand.
+	auto StartGraph = [this, &OnError](const FString& PackageName, UPCGGraph*& OutGraph, TFunctionRef<bool(UPCGGraph*)> IsComplete)
 	{
 		OutGraph = FindExisting<UPCGGraph>(PackageName);
-		if (OutGraph)
+		if (!OutGraph)
+		{
+			OutGraph = CreateAsset<UPCGGraph>(PackageName);
+			return true;
+		}
+		if (IsComplete(OutGraph))
 		{
 			Report.Skipped.Add(PackageName);
 			return false;
 		}
-		OutGraph = CreateAsset<UPCGGraph>(PackageName);
+
+		FGraphWriter(OutGraph, OnError).Clear();
+		OutGraph->MarkPackageDirty();
+		PackagesToSave.AddUnique(OutGraph->GetPackage());
+		Report.Rebuilt.Add(PackageName);
 		return true;
 	};
 
@@ -717,7 +807,8 @@ void FCityContentBuilder::BuildGraphs()
 
 	// --- SG_Streets: crossings and street segments -------------------------------------------
 	UPCGGraph* Streets = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Streets"), Streets))
+	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Streets"), Streets,
+		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, {}, { CrossingsPin }); }))
 	{
 		FGraphWriter Writer(Streets, OnError);
 		Writer.AddParameter(TEXT("CitySize"), 400.0);
@@ -745,7 +836,8 @@ void FCityContentBuilder::BuildGraphs()
 	// --- SG_Blocks: blocks (sidewalk level) and the sidewalk slots for street furniture -------
 	const FName SidewalkSlotsPin(TEXT("SidewalkSlots"));
 	UPCGGraph* Blocks = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Blocks"), Blocks))
+	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Blocks"), Blocks,
+		[&SidewalkSlotsPin](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { CrossingsPin }, { BlocksPin, SidewalkSlotsPin }); }))
 	{
 		FGraphWriter Writer(Blocks, OnError);
 		PlaceInputOutput(Writer, -700, 500);
@@ -769,7 +861,8 @@ void FCityContentBuilder::BuildGraphs()
 
 	// --- SG_Buildings: lots, density and buildings ----------------------------------------------
 	UPCGGraph* Buildings = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Buildings"), Buildings))
+	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Buildings"), Buildings,
+		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { BlocksPin }, { BuildingsPin }); }))
 	{
 		FGraphWriter Writer(Buildings, OnError);
 		Writer.AddParameter(TEXT("BuildingDensity"), 0.6);
@@ -827,7 +920,8 @@ void FCityContentBuilder::BuildGraphs()
 
 	// --- SG_StreetLamps and SG_Trees: one subgraph per kind of street furniture -----------------
 	UPCGGraph* StreetLamps = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_StreetLamps"), StreetLamps))
+	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_StreetLamps"), StreetLamps,
+		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { SlotsPin }, {}); }))
 	{
 		FGraphWriter Writer(StreetLamps, OnError);
 		PlaceInputOutput(Writer, -700, 500);
@@ -842,7 +936,8 @@ void FCityContentBuilder::BuildGraphs()
 	}
 
 	UPCGGraph* Trees = nullptr;
-	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Trees"), Trees))
+	if (StartGraph(FString(SubgraphsPath) / TEXT("SG_Trees"), Trees,
+		[](UPCGGraph* Graph) { return HasWiredInputOutput(Graph, { SlotsPin }, {}); }))
 	{
 		FGraphWriter Writer(Trees, OnError);
 		PlaceInputOutput(Writer, -700, 800);
@@ -865,7 +960,8 @@ void FCityContentBuilder::BuildGraphs()
 
 	// --- PCG_City: only wires the systems and passes the parameters down ------------------------
 	UPCGGraph* City = nullptr;
-	if (StartGraph(FString(RootPath) / TEXT("PCG_City"), City))
+	if (StartGraph(FString(RootPath) / TEXT("PCG_City"), City,
+		[](UPCGGraph* Graph) { return HasWiredNodeInputs(Graph, { CrossingsPin, BlocksPin, SlotsPin }); }))
 	{
 		FGraphWriter Writer(City, OnError);
 		Writer.AddParameter(TEXT("CitySize"), 400.0);

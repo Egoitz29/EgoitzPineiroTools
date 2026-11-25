@@ -7,7 +7,8 @@ class UPackage;
 /**
  * Creates the content the city needs inside the plugin (Content/City): materials, street furniture
  * meshes and PCG graphs. Assets that already exist are kept as they are, so it can be run again
- * safely; to rebuild one, delete it in the Content Browser and run the builder again.
+ * safely. The exception is a graph that is incomplete (an earlier run could not wire it): it is emptied
+ * and built again. To rebuild any other asset, delete it in the Content Browser and run the builder again.
  */
 class FCityContentBuilder
 {
@@ -16,6 +17,7 @@ public:
 	struct FReport
 	{
 		TArray<FString> Created;
+		TArray<FString> Rebuilt;
 		TArray<FString> Skipped;
 		TArray<FString> Errors;
 
