@@ -44,6 +44,11 @@ todas las instancias. Dos ciudades con la misma huella son la misma ciudad.
 | Densidad (0-1) | `BuildingDensity` | 0 – 1 | Parte de las parcelas que se construyen: 0 es una zona abierta y 1, un cañón urbano. |
 | Altura media (m) | `BuildingHeight` | 3 – 300 | Altura media de los edificios. |
 | Variación (0-1) | `BuildingVariation` | 0 – 1 | Diferencia entre edificios: altura ±75 %, huella entre el 85 % y el 55 % de la parcela y desplazamiento dentro de ella. Con 0, todos iguales. |
+| Centro y periferia | — | sí / no | Activa la zonificación. Desactivada, el panel pone a 1 los cuatro factores de zona. |
+| Radio del centro (m) | `ZoneRadius` | 10 – 3000 | Distancia desde el centro de la ciudad hasta donde empieza la periferia. |
+| Transición (0-1) | `ZoneTransition` | 0 – 1 | 0: el centro acaba de golpe en el radio. 1: cambio gradual desde el centro hasta el doble del radio. |
+| Altura en el centro / en la periferia (x) | `ZoneCenterHeight`, `ZonePeripheryHeight` | 0.1 – 5 | Multiplican la altura media en cada zona. |
+| Densidad en el centro / en la periferia (x) | `ZoneCenterDensity`, `ZonePeripheryDensity` | 0 – 2 | Multiplican la densidad en cada zona (como mucho, todas las parcelas). |
 | Manzanas que son parque (0-1) | `ParkRatio` | 0 – 1 | Parte de las manzanas que son parque en lugar de edificarse. |
 | Densidad de árboles (0-1) | `ParkTreeDensity` | 0 – 1 | Parte de los huecos del parque (uno cada 6 m) que tienen un árbol o un arbusto. |
 | Variación de escala (0-1) | `ParkTreeScaleVariation` | 0 – 1 | Diferencia de tamaño de la vegetación de los parques: con 1, de la mitad a una vez y media. |
@@ -81,6 +86,11 @@ SG_Parks:      ParkBlocks ─► City Park ─┬─► Lawns ─► Static Mesh
   (0.5 – 1) deja pasar el porcentaje `BuildingDensity`. *City Buildings* calcula la altura, la huella y la
   posición de cada edificio dentro de su parcela. *Transform Points* le da unos grados de giro,
   *Self Pruning* elimina cualquier solape y *Static Mesh Spawner* elige uno de tres materiales.
+- **Zonificación.** *City Lots* y *City Buildings* calculan para cada parcela un gradiente `Zone`: 1 en el
+  centro de la ciudad y 0 en la periferia, con un paso suave alrededor de `ZoneRadius` cuya anchura marca
+  `ZoneTransition`. Lo guardan como atributo y lo usan para interpolar entre los factores de la periferia y
+  los del centro: la densidad en *City Lots* y la altura en *City Buildings*. Así sale un centro denso y
+  alto y una periferia baja y dispersa.
 - **Parques.** *City Park* cubre cada `ParkBlock` de césped y prepara un hueco cada 6 m, algo desplazado.
   Cada hueco tiene planta con probabilidad `ParkTreeDensity` y un tamaño que varía según
   `ParkTreeScaleVariation`. *Transform Points* gira cada planta y el *Static Mesh Spawner* elige entre árbol

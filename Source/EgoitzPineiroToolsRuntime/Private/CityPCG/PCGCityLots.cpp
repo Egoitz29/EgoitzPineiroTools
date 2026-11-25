@@ -27,7 +27,7 @@ namespace
 #if WITH_EDITOR
 FText UPCGCityLotsSettings::GetNodeTooltipText() const
 {
-	return LOCTEXT("Tooltip", "Building lots facing the street inside each block. $Density >= 0.5 means the lot is built (see BuildingDensity).");
+	return LOCTEXT("Tooltip", "Building lots facing the street inside each block. $Density >= 0.5 means the lot is built (BuildingDensity, changed by the zone).");
 }
 #endif
 
@@ -63,6 +63,9 @@ bool FPCGCityLotsElement::ExecuteInternal(FPCGContext* Context) const
 	const double Sidewalk = FMath::Max(Settings->SidewalkWidth, 0.0) * 100.0;
 	const double TargetDepth = FMath::Max(Settings->LotDepth, 2.0) * 100.0;
 	const double TargetWidth = FMath::Max(Settings->LotWidth, 2.0) * 100.0;
+	const double ZoneRadius = FMath::Max(Settings->ZoneRadius, 1.0) * 100.0;
+	const double CenterFactor = FMath::Max(Settings->CenterDensityFactor, 0.0);
+	const double PeripheryFactor = FMath::Max(Settings->PeripheryDensityFactor, 0.0);
 	const int32 GraphSeed = Context->GetSeed(); // node seed combined with the PCG Component seed
 
 	TArray<FLot> Lots;
@@ -120,22 +123,28 @@ bool FPCGCityLotsElement::ExecuteInternal(FPCGContext* Context) const
 	auto Entries = Points->GetMetadataEntryValueRange(/*bAllocate=*/false);
 	FPCGMetadataAttribute<int32>* BlockIDAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::BlockID, 0);
 	FPCGMetadataAttribute<int32>* SideAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::Side, 0);
+	FPCGMetadataAttribute<double>* ZoneAttribute = CityPCG::CreateAttribute<double>(Points, CityPCGNames::Zone, 0.0);
 
 	for (int32 Index = 0; Index < Lots.Num(); ++Index)
 	{
 		const FLot& Lot = Lots[Index];
 		const int32 LotSeed = PCGHelpers::ComputeSeedFromPosition(Lot.Center);
 
+		// Density of the lot's zone: from the periphery factor to the centre factor along the gradient
+		const double Zone = CityPCG::ZoneWeight(Lot.Center, ZoneRadius, Settings->ZoneTransition);
+		const double LotDensity = FMath::Clamp(BuildingDensity * FMath::Lerp(PeripheryFactor, CenterFactor, Zone), 0.0, 1.0);
+
 		// One random stream per lot: the lot decides alone, whatever happens to the others
 		FRandomStream Random(PCGHelpers::ComputeSeed(GraphSeed, LotSeed));
 		const double Roll = Random.FRand();
-		const double Density = BuildingDensity <= 0.0 ? 0.0 : FMath::Clamp(1.0 - 0.5 * Roll / BuildingDensity, 0.0, 1.0);
+		const double Density = LotDensity <= 0.0 ? 0.0 : FMath::Clamp(1.0 - 0.5 * Roll / LotDensity, 0.0, 1.0);
 
 		Transforms[Index] = CityPCG::MakeBoxTransform(Lot.Center, Lot.Size);
 		Seeds[Index] = LotSeed;
 		Densities[Index] = static_cast<float>(Density);
 		BlockIDAttribute->SetValue(Entries[Index], Lot.BlockID);
 		SideAttribute->SetValue(Entries[Index], Lot.Side);
+		ZoneAttribute->SetValue(Entries[Index], Zone);
 	}
 
 	CityPCG::AddOutput(Context, Points, CityPCGNames::LotsPin);

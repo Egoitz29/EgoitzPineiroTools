@@ -57,4 +57,12 @@ namespace CityPCG
 
 	/** Sends a data object to an output pin. */
 	void AddOutput(FPCGContext* Context, UPCGData* Data, FName PinLabel);
+
+	/**
+	 * Urban zoning gradient: how much a location belongs to the centre of the city (the world origin).
+	 * 1 inside the centre zone, 0 in the periphery, and a smooth step in between. The step is
+	 * centred on RadiusCm and is 2 * Transition * RadiusCm wide: Transition 0 is an abrupt edge,
+	 * Transition 1 a gradient from the very centre to twice the radius.
+	 */
+	double ZoneWeight(const FVector& Location, double RadiusCm, double Transition);
 }

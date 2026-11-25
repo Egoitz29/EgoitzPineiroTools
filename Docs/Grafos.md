@@ -30,8 +30,8 @@ puntos de mobiliario tienen escala 1, para que las mallas conserven su tamaño.
 | Nodo | Entradas | Salidas | Atributos | Parámetros conectados |
 | --- | --- | --- | --- | --- |
 | City Street Grid | — | `Roads`, `Blocks`, `UrbanBlocks`, `ParkBlocks` | Roads: `RoadKind`, `Axis`, `Col`, `Row`. Manzanas: `BlockID`, `Col`, `Row`, `Park` | `CitySize`, `BlockSize`, `ParkRatio` |
-| City Lots | `Blocks` | `Lots` | `BlockID`, `Side`, `$Density` | `BuildingDensity` |
-| City Buildings | `Lots` | `Buildings` | `Height`, `Floors` | `BuildingHeight`, `BuildingVariation` |
+| City Lots | `Blocks` | `Lots` | `BlockID`, `Side`, `Zone`, `$Density` | `BuildingDensity`, `ZoneRadius`, `ZoneTransition`, `CenterDensityFactor` ← `ZoneCenterDensity`, `PeripheryDensityFactor` ← `ZonePeripheryDensity` |
+| City Buildings | `Lots` | `Buildings` | `Height`, `Floors`, `Zone` | `BuildingHeight`, `BuildingVariation`, `ZoneRadius`, `ZoneTransition`, `CenterHeightFactor` ← `ZoneCenterHeight`, `PeripheryHeightFactor` ← `ZonePeripheryHeight` |
 | City Sidewalk Points | `Blocks` | `Points` | `BlockID`, `Side` | — |
 | City Park | `Blocks` | `Lawns`, `Plants` | Plants: `BlockID` | `TreeDensity` ← `ParkTreeDensity`, `ScaleVariation` ← `ParkTreeScaleVariation` |
 
@@ -57,15 +57,24 @@ nodos en *Details*: tiene que ser la misma en todos.)
 15 cm sobre la calzada: la acera.
 
 ### SG_Buildings
-Parámetros extra: `ParkRatio`, `BuildingDensity`, `BuildingHeight` y `BuildingVariation`.
+Parámetros extra: `ParkRatio`, `BuildingDensity`, `BuildingHeight`, `BuildingVariation` y los seis de la
+zonificación (`ZoneRadius`, `ZoneTransition`, `ZoneCenterHeight`, `ZonePeripheryHeight`,
+`ZoneCenterDensity`, `ZonePeripheryDensity`).
 
-1. `City Street Grid.UrbanBlocks` → **City Lots** (los parques no se edifican). Dentro del anillo de acera (3 m), una franja de 18 m de fondo
-   a lo largo de los cuatro lados se corta en parcelas de unos 15 m de frente. Las esquinas son de las filas
-   norte y sur, así que no hay solapes. Cada parcela recibe
-   `$Density = 1 − 0.5 · R / BuildingDensity`, con `R` aleatorio en [0, 1) a partir de la seed.
-2. **Density Filter** (0.5 – 1): deja pasar las parcelas con `R ≤ BuildingDensity`, es decir, ese
-   porcentaje de parcelas.
-3. **City Buildings**: altura `BuildingHeight · (1 ± 0.75 · BuildingVariation)` (mínimo 3 m), huella del
+**Zonificación.** Para cada parcela, `Zone = 1 − SmoothStep(R − W/2, R + W/2, d)`, donde `d` es la distancia
+al centro de la ciudad, `R = ZoneRadius` y `W = 2 · ZoneTransition · R`. Vale 1 en el centro y 0 en la
+periferia; con `ZoneTransition` 0 el cambio es de golpe. *City Lots* y *City Buildings* lo calculan igual y
+lo guardan en el atributo `Zone`.
+
+1. `City Street Grid.UrbanBlocks` → **City Lots** (los parques no se edifican). Dentro del anillo de acera
+   (3 m), una franja de 18 m de fondo a lo largo de los cuatro lados se corta en parcelas de unos 15 m de
+   frente. Las esquinas son de las filas norte y sur, así que no hay solapes. La densidad de la zona es
+   `D = BuildingDensity · Lerp(ZonePeripheryDensity, ZoneCenterDensity, Zone)`, y cada parcela recibe
+   `$Density = 1 − 0.5 · R / D`, con `R` aleatorio en [0, 1) a partir de la seed.
+2. **Density Filter** (0.5 – 1): deja pasar las parcelas con `R ≤ D`, es decir, ese porcentaje de parcelas
+   en cada zona.
+3. **City Buildings**: altura `H · (1 ± 0.75 · BuildingVariation)` (mínimo 3 m), con
+   `H = BuildingHeight · Lerp(ZonePeripheryHeight, ZoneCenterHeight, Zone)`; huella del
    85 % de la parcela menos hasta un 30 % · `BuildingVariation` por eje, y un desplazamiento dentro de la
    parcela que nunca la saca de ella.
 4. **Transform Points**: giro aleatorio de ±4°.
@@ -94,7 +103,8 @@ Parámetros extra: `ParkRatio`, `ParkTreeDensity` y `ParkTreeScaleVariation`.
 ## PCG_City
 
 - *Graph Parameters*: `CitySize`, `BlockSize`, `BuildingDensity`, `BuildingHeight`, `BuildingVariation`,
-  `ParkRatio`, `ParkTreeDensity` y `ParkTreeScaleVariation` (Double; el panel los escribe), y `GraphVersion`
+  `ParkRatio`, `ParkTreeDensity`, `ParkTreeScaleVariation` y los seis `Zone*` (Double; el panel los escribe,
+  con los factores a 1 si la zonificación está desactivada), y `GraphVersion`
   (la versión del código que montó los grafos).
 - Un *Get Graph Parameter* por parámetro y un nodo *Subgraph* por sistema. Cada nodo *Subgraph* recibe por
   sus pines de parámetro los *Graph Parameters* que tiene su subgrafo (lista `Systems` en `BuildGraphs`).

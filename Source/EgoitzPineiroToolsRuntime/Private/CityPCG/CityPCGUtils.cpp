@@ -70,4 +70,16 @@ namespace CityPCG
 		Output.Data = Data;
 		Output.Pin = PinLabel;
 	}
+
+	double ZoneWeight(const FVector& Location, double RadiusCm, double Transition)
+	{
+		const double Distance = FVector2D(Location.X, Location.Y).Size();
+		const double Radius = FMath::Max(RadiusCm, 1.0);
+		const double Width = 2.0 * FMath::Clamp(Transition, 0.0, 1.0) * Radius;
+		if (Width < 1.0)
+		{
+			return Distance <= Radius ? 1.0 : 0.0;
+		}
+		return 1.0 - FMath::SmoothStep(Radius - 0.5 * Width, Radius + 0.5 * Width, Distance);
+	}
 }

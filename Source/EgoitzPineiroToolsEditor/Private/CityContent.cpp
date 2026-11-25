@@ -793,6 +793,20 @@ void FCityContent::BuildGraphs()
 		UPCGNode* GetDensity = Writer.AddGetParameter(Param::BuildingDensity, -750, 300);
 		UPCGNode* Lots = Writer.Add(UPCGCityLotsSettings::StaticClass(), -400, 0);
 
+		// Urban zoning: the same gradient (radius, transition) in City Lots and City Buildings
+		Writer.AddParameter(Param::ZoneRadius, 120.0);
+		Writer.AddParameter(Param::ZoneTransition, 0.5);
+		Writer.AddParameter(Param::ZoneCenterHeight, 1.0);
+		Writer.AddParameter(Param::ZonePeripheryHeight, 1.0);
+		Writer.AddParameter(Param::ZoneCenterDensity, 1.0);
+		Writer.AddParameter(Param::ZonePeripheryDensity, 1.0);
+		UPCGNode* GetZoneRadius = Writer.AddGetParameter(Param::ZoneRadius, -750, 600);
+		UPCGNode* GetZoneTransition = Writer.AddGetParameter(Param::ZoneTransition, -750, 750);
+		UPCGNode* GetCenterDensity = Writer.AddGetParameter(Param::ZoneCenterDensity, -750, 900);
+		UPCGNode* GetPeripheryDensity = Writer.AddGetParameter(Param::ZonePeripheryDensity, -750, 1050);
+		UPCGNode* GetCenterHeight = Writer.AddGetParameter(Param::ZoneCenterHeight, -50, 550);
+		UPCGNode* GetPeripheryHeight = Writer.AddGetParameter(Param::ZonePeripheryHeight, -50, 700);
+
 		UPCGNode* DensityFilter = Writer.AddStandard(TEXT("PCGDensityFilterSettings"), -50, 0);
 		Writer.Set(DensityFilter, TEXT("LowerBound"), TEXT("0.5"));
 		Writer.Set(DensityFilter, TEXT("UpperBound"), TEXT("1.0"));
@@ -816,6 +830,15 @@ void FCityContent::BuildGraphs()
 		Writer.ConnectParameter(GetDensity, Lots, Param::BuildingDensity);
 		Writer.ConnectParameter(GetHeight, CityBuildings, Param::BuildingHeight);
 		Writer.ConnectParameter(GetVariation, CityBuildings, Param::BuildingVariation);
+		for (UPCGNode* Zoned : { Lots, CityBuildings })
+		{
+			Writer.ConnectParameter(GetZoneRadius, Zoned, TEXT("ZoneRadius"));
+			Writer.ConnectParameter(GetZoneTransition, Zoned, TEXT("ZoneTransition"));
+		}
+		Writer.ConnectParameter(GetCenterDensity, Lots, TEXT("CenterDensityFactor"));
+		Writer.ConnectParameter(GetPeripheryDensity, Lots, TEXT("PeripheryDensityFactor"));
+		Writer.ConnectParameter(GetCenterHeight, CityBuildings, TEXT("CenterHeightFactor"));
+		Writer.ConnectParameter(GetPeripheryHeight, CityBuildings, TEXT("PeripheryHeightFactor"));
 		Writer.Chain(Lots, LotsPin, {
 			{ DensityFilter, In, Out },
 			{ CityBuildings, LotsPin, BuildingsPin },
@@ -901,11 +924,19 @@ void FCityContent::BuildGraphs()
 		Writer.AddParameter(Param::ParkRatio, 0.15);
 		Writer.AddParameter(Param::ParkTreeDensity, 0.6);
 		Writer.AddParameter(Param::ParkTreeScaleVariation, 0.4);
+		Writer.AddParameter(Param::ZoneRadius, 120.0);
+		Writer.AddParameter(Param::ZoneTransition, 0.5);
+		Writer.AddParameter(Param::ZoneCenterHeight, 1.0);
+		Writer.AddParameter(Param::ZonePeripheryHeight, 1.0);
+		Writer.AddParameter(Param::ZoneCenterDensity, 1.0);
+		Writer.AddParameter(Param::ZonePeripheryDensity, 1.0);
 		Writer.AddParameter(Param::GraphVersion, 0.0); // the real version is written at the end, only if all went well
 
 		// One Get Graph Parameter node per parameter, shared by every subgraph that needs it
 		const FName AllParams[] = { Param::CitySize, Param::BlockSize, Param::BuildingDensity, Param::BuildingHeight,
-			Param::BuildingVariation, Param::ParkRatio, Param::ParkTreeDensity, Param::ParkTreeScaleVariation };
+			Param::BuildingVariation, Param::ParkRatio, Param::ParkTreeDensity, Param::ParkTreeScaleVariation,
+			Param::ZoneRadius, Param::ZoneTransition, Param::ZoneCenterHeight, Param::ZonePeripheryHeight,
+			Param::ZoneCenterDensity, Param::ZonePeripheryDensity };
 		TMap<FName, UPCGNode*> GetNodes;
 		int32 GetY = -400;
 		for (const FName& Name : AllParams)
@@ -924,7 +955,8 @@ void FCityContent::BuildGraphs()
 		{
 			{ Streets, { Param::CitySize, Param::BlockSize } },
 			{ Blocks, { Param::CitySize, Param::BlockSize } },
-			{ Buildings, { Param::CitySize, Param::BlockSize, Param::ParkRatio, Param::BuildingDensity, Param::BuildingHeight, Param::BuildingVariation } },
+			{ Buildings, { Param::CitySize, Param::BlockSize, Param::ParkRatio, Param::BuildingDensity, Param::BuildingHeight, Param::BuildingVariation,
+				Param::ZoneRadius, Param::ZoneTransition, Param::ZoneCenterHeight, Param::ZonePeripheryHeight, Param::ZoneCenterDensity, Param::ZonePeripheryDensity } },
 			{ StreetLamps, { Param::CitySize, Param::BlockSize } },
 			{ Trees, { Param::CitySize, Param::BlockSize } },
 			{ Parks, { Param::CitySize, Param::BlockSize, Param::ParkRatio, Param::ParkTreeDensity, Param::ParkTreeScaleVariation } },

@@ -29,4 +29,5 @@ namespace CityPCGNames
 	inline const FName Side = TEXT("Side");         // int32: side of the block (0 south, 1 east, 2 north, 3 west)
 	inline const FName Height = TEXT("Height");     // double: building height in metres
 	inline const FName Floors = TEXT("Floors");     // int32: building floors (3.5 m each)
+	inline const FName Zone = TEXT("Zone");         // double: 1 in the city centre, 0 in the periphery (urban zoning)
 }

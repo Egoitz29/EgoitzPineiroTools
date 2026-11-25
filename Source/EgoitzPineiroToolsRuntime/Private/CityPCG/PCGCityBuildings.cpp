@@ -51,6 +51,9 @@ bool FPCGCityBuildingsElement::ExecuteInternal(FPCGContext* Context) const
 	const TArray<CityPCG::FCityBox> Lots = CityPCG::ReadBoxes(Context, CityPCGNames::LotsPin);
 
 	const double AverageHeight = FMath::Max(Settings->BuildingHeight, 1.0) * 100.0;
+	const double ZoneRadius = FMath::Max(Settings->ZoneRadius, 1.0) * 100.0;
+	const double CenterFactor = FMath::Max(Settings->CenterHeightFactor, 0.05);
+	const double PeripheryFactor = FMath::Max(Settings->PeripheryHeightFactor, 0.05);
 	const double MinHeight = FMath::Max(Settings->MinHeight, 1.0) * 100.0;
 	const double Variation = FMath::Clamp(Settings->BuildingVariation, 0.0, 1.0);
 	const double MaxFootprint = FMath::Clamp(Settings->MaxFootprint, 0.1, 0.95);
@@ -64,6 +67,7 @@ bool FPCGCityBuildingsElement::ExecuteInternal(FPCGContext* Context) const
 	auto Entries = Points->GetMetadataEntryValueRange(/*bAllocate=*/false);
 	FPCGMetadataAttribute<double>* HeightAttribute = CityPCG::CreateAttribute<double>(Points, CityPCGNames::Height, 0.0);
 	FPCGMetadataAttribute<int32>* FloorsAttribute = CityPCG::CreateAttribute<int32>(Points, CityPCGNames::Floors, 0);
+	FPCGMetadataAttribute<double>* ZoneAttribute = CityPCG::CreateAttribute<double>(Points, CityPCGNames::Zone, 0.0);
 
 	for (int32 Index = 0; Index < Lots.Num(); ++Index)
 	{
@@ -72,8 +76,12 @@ bool FPCGCityBuildingsElement::ExecuteInternal(FPCGContext* Context) const
 		// One random stream per lot: changing one lot never changes the others
 		FRandomStream Random(PCGHelpers::ComputeSeed(GraphSeed, Lot.Seed));
 
+		// Average height of the lot's zone: from the periphery factor to the centre factor along the gradient
+		const double Zone = CityPCG::ZoneWeight(Lot.Center, ZoneRadius, Settings->ZoneTransition);
+		const double ZoneHeight = AverageHeight * FMath::Lerp(PeripheryFactor, CenterFactor, Zone);
+
 		const double Spread = Variation * Random.FRandRange(-0.75f, 0.75f);
-		const double Height = FMath::Max(MinHeight, AverageHeight * (1.0 + Spread));
+		const double Height = FMath::Max(MinHeight, ZoneHeight * (1.0 + Spread));
 		const double FootprintX = MaxFootprint - FootprintVariation * Variation * Random.FRand();
 		const double FootprintY = MaxFootprint - FootprintVariation * Variation * Random.FRand();
 		const FVector Size(Lot.Size.X * FootprintX, Lot.Size.Y * FootprintY, Height);
@@ -87,6 +95,7 @@ bool FPCGCityBuildingsElement::ExecuteInternal(FPCGContext* Context) const
 		Seeds[Index] = Lot.Seed;
 		HeightAttribute->SetValue(Entries[Index], Height / 100.0);
 		FloorsAttribute->SetValue(Entries[Index], FMath::Max(1, FMath::FloorToInt32(Height / FloorHeight)));
+		ZoneAttribute->SetValue(Entries[Index], Zone);
 	}
 
 	CityPCG::AddOutput(Context, Points, CityPCGNames::BuildingsPin);

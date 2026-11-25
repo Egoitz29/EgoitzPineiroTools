@@ -108,6 +108,60 @@ void SCityPanel::Construct(const FArguments& InArgs)
 					Params.BuildingVariation, 0.0, 1.0, 0.05)
 			]
 
+			// --- Urban zoning
+			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("ZoningSection", "Zonificación")) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+			[
+				SNew(SCheckBox)
+				.IsChecked_Lambda([this]() { return Generator->Params.bZoning ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([this](ECheckBoxState State) { Generator->Params.bZoning = State == ECheckBoxState::Checked; OnParameterCommitted(); })
+				.ToolTipText(LOCTEXT("ZoningTip", "Un centro denso y alto y una periferia baja y dispersa. Desactivada, la altura y la densidad son las mismas en toda la ciudad."))
+				[
+					SNew(STextBlock).Text(LOCTEXT("Zoning", "Centro y periferia"))
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SVerticalBox)
+				.IsEnabled_Lambda([this]() { return Generator->Params.bZoning; })
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeParameterRow(LOCTEXT("ZoneRadius", "Radio del centro (m)"),
+						LOCTEXT("ZoneRadiusTip", "Distancia desde el centro de la ciudad hasta donde empieza la periferia."),
+						Params.ZoneRadius, 10.0, 3000.0, 10.0)
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeParameterRow(LOCTEXT("ZoneTransition", "Transición (0-1)"),
+						LOCTEXT("ZoneTransitionTip", "0 = el centro acaba de golpe en el radio. 1 = cambio gradual desde el centro hasta el doble del radio."),
+						Params.ZoneTransition, 0.0, 1.0, 0.05)
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeParameterRow(LOCTEXT("ZoneCenterHeight", "Altura en el centro (x)"),
+						LOCTEXT("ZoneCenterHeightTip", "La altura media se multiplica por este valor en el centro."),
+						Params.ZoneCenterHeight, 0.1, 5.0, 0.1)
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeParameterRow(LOCTEXT("ZonePeripheryHeight", "Altura en la periferia (x)"),
+						LOCTEXT("ZonePeripheryHeightTip", "La altura media se multiplica por este valor en la periferia."),
+						Params.ZonePeripheryHeight, 0.1, 5.0, 0.1)
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeParameterRow(LOCTEXT("ZoneCenterDensity", "Densidad en el centro (x)"),
+						LOCTEXT("ZoneCenterDensityTip", "La densidad se multiplica por este valor en el centro (como mucho, todas las parcelas)."),
+						Params.ZoneCenterDensity, 0.0, 2.0, 0.05)
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					MakeParameterRow(LOCTEXT("ZonePeripheryDensity", "Densidad en la periferia (x)"),
+						LOCTEXT("ZonePeripheryDensityTip", "La densidad se multiplica por este valor en la periferia."),
+						Params.ZonePeripheryDensity, 0.0, 2.0, 0.05)
+				]
+			]
+
 			// --- Parks
 			+ SVerticalBox::Slot().AutoHeight()[ MakeSectionHeader(LOCTEXT("ParksSection", "Parques")) ]
 			+ SVerticalBox::Slot().AutoHeight()

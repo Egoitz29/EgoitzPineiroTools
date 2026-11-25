@@ -107,6 +107,14 @@ bool FCityGenerator::Generate(bool bFullRebuild, FText& OutMessage)
 	SetParameter(CityParamNames::ParkTreeDensity, Params.ParkTreeDensity);
 	SetParameter(CityParamNames::ParkTreeScaleVariation, Params.ParkTreeScaleVariation);
 
+	// Zoning off = every factor 1: the same height and density everywhere
+	SetParameter(CityParamNames::ZoneRadius, Params.ZoneRadius);
+	SetParameter(CityParamNames::ZoneTransition, Params.ZoneTransition);
+	SetParameter(CityParamNames::ZoneCenterHeight, Params.bZoning ? Params.ZoneCenterHeight : 1.0);
+	SetParameter(CityParamNames::ZonePeripheryHeight, Params.bZoning ? Params.ZonePeripheryHeight : 1.0);
+	SetParameter(CityParamNames::ZoneCenterDensity, Params.bZoning ? Params.ZoneCenterDensity : 1.0);
+	SetParameter(CityParamNames::ZonePeripheryDensity, Params.bZoning ? Params.ZonePeripheryDensity : 1.0);
+
 	PCG->Seed = Params.Seed;
 	PCG->GenerateLocal(/*bForce=*/true);
 	City->MarkPackageDirty();
