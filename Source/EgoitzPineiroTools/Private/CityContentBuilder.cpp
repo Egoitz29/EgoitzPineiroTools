@@ -422,6 +422,23 @@ namespace
 
 			FPropertyChangedEvent Event(Array, EPropertyChangeType::ArrayAdd);
 			static_cast<UObject*>(Settings)->PostEditChangeProperty(Event);
+
+			// The Input and Output nodes come with the graph and do not always listen to their settings,
+			// so the change above may leave their pins as they were: rebuild them from the settings.
+			if (!HasPin(Node, Label))
+			{
+				Node->SetSettingsInterface(Node->GetSettingsInterface(), /*bUpdatePins=*/true);
+			}
+			if (!HasPin(Node, Label))
+			{
+				Fail(FString::Printf(TEXT("el pin '%s' no aparece en %s después de añadirlo. Entradas: %s. Salidas: %s"),
+					*Label.ToString(), *Settings->GetClass()->GetName(), *ListPins(Node->GetInputPins()), *ListPins(Node->GetOutputPins())));
+			}
+		}
+
+		static bool HasPin(UPCGNode* Node, FName Label)
+		{
+			return Node->GetInputPin(Label) || Node->GetOutputPin(Label);
 		}
 
 		/** Makes a Subgraph node run the given graph. */
@@ -479,6 +496,10 @@ FText FCityContentBuilder::FReport::ToText() const
 	for (const FString& Message : Errors)
 	{
 		Text += TEXT("\n- ") + Message;
+	}
+	if (!Errors.IsEmpty())
+	{
+		Text += TEXT("\nLos assets que ya existen no se rehacen: para rehacer uno con errores, bórralo en el Content Browser y pulsa Crear contenido otra vez.");
 	}
 	return FText::FromString(Text);
 }
